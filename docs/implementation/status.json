@@ -32,7 +32,7 @@
     "pip_check": "passed",
     "sdist_and_wheel_build": "passed",
     "clean_environment_offline_wheel_install_and_import": "passed",
-    "github_workflow_remote_run": "initial Windows/Linux run failed during tests; .tools parent missing; fix verified locally in fresh tracked-only checkout; awaiting SSH push",
+    "github_workflow_remote_run": "initial CI failed; temp-dir fix verified locally; further hosted runs paused by free-only policy",
     "linux_execution": "remote run: dependency install/lint passed; 114 tests passed, 20 setup errors from missing temp parent; full run pending fix",
     "production_db": "not_run",
     "exchange_public_or_private_api_calls": "not_run",
@@ -277,8 +277,8 @@
   ],
   "documentation_validation": {
     "status": "passed",
-    "markdown_files_checked": 37,
-    "local_links_checked": 388,
+    "markdown_files_checked": 39,
+    "local_links_checked": 392,
     "json_files_parsed": 18,
     "fixture_schema_validated": true,
     "fixture_case_count": 8,
@@ -312,6 +312,18 @@
     "cause": "missing .tools parent for explicit pytest basetemp",
     "fix": "create directory before tests",
     "fresh_tracked_only_windows_tests_passed": 134,
-    "fix_remote_verification": "pending user SSH push"
+    "fix_remote_verification": "deferred under free-only budget policy"
+  },
+  "free_only_ci": {
+    "policy": "docs/implementation/free-ci-policy.md",
+    "agent_instructions": "AGENTS.md",
+    "remote_workflow_state": "disabled_manually",
+    "remote_ready_variable": null,
+    "paid_usage_authorized": false,
+    "user_budget_hard_stop_verified": true,
+    "hosted_runs_started_for_policy": 0,
+    "local_workflow_validation": "official actionlint v1.7.12 passed",
+    "workflow_update_push": "pending user SSH push",
+    "remote_ready_variable_status": "verified unset; new job gate defaults to false"
   }
 }

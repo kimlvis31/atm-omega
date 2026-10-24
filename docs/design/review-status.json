@@ -5,7 +5,7 @@
   "application_tests_executed": true,
   "database_or_exchange_calls_executed": "new temporary SQLite in tests only; no production DB or exchange calls",
   "gpu_executed": false,
-  "markdown_files_checked": 37,
+  "markdown_files_checked": 39,
   "json_design_examples_parsed": 10,
   "master_example_toml_parsed": true,
   "source_files_hash_checked": 558,
@@ -97,7 +97,7 @@
   "implementation_or_safety_validated": false,
   "current_design_markdown_files": 27,
   "historical_reference_markdown_files": 5,
-  "local_links_checked": 388,
+  "local_links_checked": 392,
   "design_version": "0.6",
   "documentation_semantic_checks": [
     "catalog/spec equality",
@@ -183,7 +183,7 @@
     },
     {
       "path": "docs/design/github-maintenance.md",
-      "sha256": "66d6ae757f73deeb11d2f6a9795cbf6f5a213281c89c9618b52b943d0cece9b4"
+      "sha256": "3cc719574d46e50289beb98341fa93721291166fb58618a6407e51d9f13a0f59"
     },
     {
       "path": "docs/design/gui-settings-observability.md",
@@ -279,8 +279,8 @@
   ],
   "documentation_validation": {
     "status": "passed",
-    "markdown_files_checked": 37,
-    "local_links_checked": 388,
+    "markdown_files_checked": 39,
+    "local_links_checked": 392,
     "json_files_parsed": 18,
     "fixture_schema_validated": true,
     "fixture_case_count": 8,

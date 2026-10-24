@@ -5,6 +5,7 @@ ATM-Eta와 TEFFPSeeker를 바탕으로 재설계 중인 프로젝트다. **Binan
 - [최신 구현·검증 상태](docs/implementation/README.md)
 - [실시간 수집과 TEF 이관 범위](docs/implementation/realtime-tef.md)
 - [GitHub 게시 범위](docs/implementation/repository.md)
+- [무료 CI 사용 정책](docs/implementation/free-ci-policy.md), [작업 지침](AGENTS.md)
 
 - [전체 설계와 요구사항](docs/design/README.md)
 - [이번 준비 결과와 첫 구현 기준](docs/design/implementation-readiness.md)

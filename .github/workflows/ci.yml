@@ -1,32 +1,45 @@
 name: Omega isolated checks
 
 on:
-  pull_request:
-  push:
-    branches: [main, master]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Free-budget-approved platform for this commit
+        required: true
+        default: linux
+        type: choice
+        options:
+          - linux
+          - windows
+          - both
 
 permissions:
   contents: read
 
 concurrency:
-  group: omega-ci-${{ github.workflow }}-${{ github.ref }}
+  group: omega-ci-${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
   verify:
+    # Evaluated before runner allocation. Never enable without account $0 hard stop.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          vars.OMEGA_FREE_CI_READY == 'true' &&
+          vars.OMEGA_FREE_CI_APPROVED_SHA == github.sha &&
+          vars.OMEGA_FREE_CI_PROFILE == inputs.platform }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        include:
-          - os: windows-2025
-            lock: requirements/dev-win-cp313.lock
-            python: .venv/Scripts/python.exe
-          - os: ubuntu-24.04
-            lock: requirements/dev-linux-cp313.lock
-            python: .venv/bin/python
+        include: >-
+          ${{ fromJSON(inputs.platform == 'both' &&
+          '[{"os":"ubuntu-24.04","lock":"requirements/dev-linux-cp313.lock","python":".venv/bin/python"},{"os":"windows-2025","lock":"requirements/dev-win-cp313.lock","python":".venv/Scripts/python.exe"}]' ||
+          inputs.platform == 'windows' &&
+          '[{"os":"windows-2025","lock":"requirements/dev-win-cp313.lock","python":".venv/Scripts/python.exe"}]' ||
+          '[{"os":"ubuntu-24.04","lock":"requirements/dev-linux-cp313.lock","python":".venv/bin/python"}]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       VENV_PYTHON: ${{ matrix.python }}
       PYTHONUTF8: '1'

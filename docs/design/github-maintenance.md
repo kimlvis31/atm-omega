@@ -1,6 +1,6 @@
 # GitHub Actions 유지보수·검증·릴리스 설계
 
-2026-10-24. 기본 ci.yml과 Dependabot 설정을 추가했다. 고정 action SHA·contents read·Win/Linux matrix·hash lock·network-free tests·build를 정의했다. GitHub 등록/push/원격 CI 실행은 하지 않았고 아래 확장 workflow 전체가 구현된 것은 아니다.
+2026-10-24. 초기 GitHub 등록·push·첫 CI는 수행했고 임시 폴더 누락 수정을 준비했다. 이후 사용자가 **유료 사용 금지·무료량 배분**을 결정해 원격 workflow를 일시 비활성화했다. 현재 적용 기준은 [무료 CI 정책](../implementation/free-ci-policy.md)이며, 아래 자동 PR/main/schedule은 향후 설계 후보일 뿐 현재 활성 정책이 아니다. 무료량과 과금 차단 확인 없이 적용하지 않는다.
 
 ## 1. 실행 경로
 
