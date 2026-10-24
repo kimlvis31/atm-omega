@@ -35,3 +35,10 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+
+# Local design/review notes and agent tracking; keep files, omit from publication.
+/AGENTS.md
+/docs/
+/requirements/bootstrap-uv.lock
+/requirements/bootstrap-uv.manifest.json
+/requirements/dev-win-cp313.manifest.json

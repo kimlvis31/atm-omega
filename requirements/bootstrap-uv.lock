@@ -1,3 +1,0 @@
-# Generated from downloaded PyPI wheels on 2026-10-24.
-# Target: Windows x64 / CPython 3.13; not a runtime or Linux lock.
-uv==0.13.5 --hash=sha256:1fb29fc46ba12033e2ef95a95ac79d649e71bbb1358419bbbcbd19d86026ef2f

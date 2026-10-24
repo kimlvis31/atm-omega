@@ -35,8 +35,7 @@ def test_money_rejects_float_and_nonfinite(value):
 
 
 def test_cash_ledger_against_independent_fixture():
-    cases = json.loads(Path("docs/design/fixtures/first-slice-cases.json").read_text())
-    case = cases["cases"][0]
+    case = json.loads(Path("tests/fixtures/cash-ledger.json").read_text())
     ledger = CashLedger("account", SPOT, "SYNTH", D(case["initial"]["cash"]))
     for step in case["steps"]:
         event = fill(

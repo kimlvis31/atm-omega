@@ -1,5 +1,8 @@
-include README.md .python-version
+include README.md README.ko.md .python-version
 recursive-include tests *.py *.json
-recursive-include requirements *.in *.lock *.json *.md
-recursive-include docs/examples *.toml
-recursive-include docs/design/fixtures *.json
+recursive-include config *.toml
+include requirements/README.md
+include requirements/dev.in requirements/requirements.in requirements/runtime.in
+include requirements/dev-win-cp313.lock requirements/dev-linux-cp313.lock
+prune docs
+exclude AGENTS.md

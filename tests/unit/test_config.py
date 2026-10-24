@@ -14,7 +14,7 @@ def test_default_is_headless_and_loading_creates_nothing(tmp_path):
 
 
 def test_documented_master_example_and_root_relative_paths(tmp_path):
-    source = Path("docs/examples/master.config.example.toml").resolve()
+    source = Path("config/master.config.example.toml").resolve()
     config = load_master(tmp_path, source)
     assert config.instance_id == "omega-main"
     assert config.paths["runtime_settings_store"] == tmp_path / "state/settings.json"

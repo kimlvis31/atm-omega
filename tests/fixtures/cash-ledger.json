@@ -1,0 +1,95 @@
+{
+  "id": "FX01",
+  "kind": "cash_ledger",
+  "assumptions": [
+    "synthetic cash inventory, same quote/fee currency",
+    "fees expensed on fill; no settlement delay or tax",
+    "Decimal exact arithmetic; weighted-average book cost excludes fees"
+  ],
+  "initial": {
+    "cash": "2000",
+    "quantity": "0",
+    "quote_currency": "SYNTH"
+  },
+  "steps": [
+    {
+      "event": "FillObserved",
+      "fill_id": "b1",
+      "side": "BUY",
+      "quantity": "4",
+      "price": "100",
+      "fee": "0.4",
+      "expected": {
+        "cash": "1599.6",
+        "quantity": "4",
+        "book_cost": "400"
+      }
+    },
+    {
+      "event": "FillObserved",
+      "fill_id": "b2",
+      "side": "BUY",
+      "quantity": "6",
+      "price": "102",
+      "fee": "0.612",
+      "expected": {
+        "cash": "986.988",
+        "quantity": "10",
+        "book_cost": "1012",
+        "average_cost": "101.2"
+      }
+    },
+    {
+      "event": "FillObserved",
+      "fill_id": "b2",
+      "side": "BUY",
+      "quantity": "6",
+      "price": "102",
+      "fee": "0.612",
+      "expected": {
+        "duplicate": true,
+        "cash": "986.988",
+        "quantity": "10",
+        "fees_paid": "1.012"
+      }
+    },
+    {
+      "event": "FillObserved",
+      "fill_id": "s1",
+      "side": "SELL",
+      "quantity": "5",
+      "price": "110",
+      "fee": "0.55",
+      "expected": {
+        "cash": "1536.438",
+        "quantity": "5",
+        "book_cost": "506",
+        "realized_gross_pnl": "44",
+        "fees_paid": "1.562",
+        "equity_at_mark_110": "2086.438"
+      }
+    },
+    {
+      "event": "FillObserved",
+      "fill_id": "s2",
+      "side": "SELL",
+      "quantity": "5",
+      "price": "90",
+      "fee": "0.45",
+      "expected": {
+        "cash": "1985.988",
+        "quantity": "0",
+        "book_cost": "0",
+        "realized_gross_pnl": "-12",
+        "fees_paid": "2.012"
+      }
+    }
+  ],
+  "expected": {
+    "cash": "1985.988",
+    "quantity": "0",
+    "net_pnl": "-14.012",
+    "distinct_fills": 4,
+    "no_duplicate_cash_or_fee_effect": true
+  }
+}

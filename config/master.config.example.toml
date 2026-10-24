@@ -1,6 +1,6 @@
-# Omega master.config design example (2026-10-24).
-# Not read by the existing ATM app. New read-only Omega loader supports this example.
-# GUI and safety policies are user requirements; timeout values are drafts.
+# Omega bootstrap configuration example.
+# Loaded explicitly by the bootstrap configuration loader.
+# The public-data collector uses its own CLI options.
 schema_version = 1
 instance_id = "omega-main"
 
@@ -33,7 +33,3 @@ data_dir = "./data"
 artifact_dir = "./artifacts"
 runtime_settings_store = "./state/settings.json"
 bootstrap_log_dir = "./logs/bootstrap"
-
-# Service topology, explicit CLI overrides, credentials references, and
-# remote-control connection details will be specified in later designs.
-# Starting a trading runtime must not implicitly activate/resume strategies.
