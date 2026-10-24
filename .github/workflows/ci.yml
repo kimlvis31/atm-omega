@@ -1,0 +1,57 @@
+name: Omega isolated checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: omega-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            lock: requirements/dev-win-cp313.lock
+            python: .venv/Scripts/python.exe
+          - os: ubuntu-24.04
+            lock: requirements/dev-linux-cp313.lock
+            python: .venv/bin/python
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      VENV_PYTHON: ${{ matrix.python }}
+      PYTHONUTF8: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, verified 2026-10-24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, verified 2026-10-24
+        with:
+          python-version-file: .python-version
+      - name: Create isolated environment
+        run: python -m venv .venv
+      - name: Install hashed development dependencies
+        run: '"$VENV_PYTHON" -I -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r "${{ matrix.lock }}"'
+      - name: Dependency consistency
+        run: '"$VENV_PYTHON" -I -m pip --isolated check'
+      - name: Style and dependency boundaries
+        run: |
+          "$VENV_PYTHON" -I -m ruff check src tests
+          "$VENV_PYTHON" -I -m ruff format --check src tests
+      - name: Network-free tests including spawned control owner
+        run: '"$VENV_PYTHON" -I -m pytest --basetemp=.tools/pytest-ci -q'
+      - name: Build package without fetching build dependencies
+        run: '"$VENV_PYTHON" -I -m build --no-isolation --outdir .tools/dist'

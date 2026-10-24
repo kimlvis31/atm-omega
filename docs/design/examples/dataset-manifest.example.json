@@ -1,0 +1,110 @@
+{
+  "example_only": true,
+  "schema_version": 1,
+  "status": "design_example_not_executed",
+  "hashes_are_placeholders": true,
+  "dataset_id": "dataset-mc-example-0001",
+  "dataset_kind": "generated_market",
+  "source_dataset_id": "dataset-source-example",
+  "source_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "market": {
+    "exchange": "binance",
+    "contract_kind": "linear_perpetual",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "instrument_ids": [
+      "binance:usdm:BTCUSDT",
+      "binance:usdm:ETHUSDT"
+    ]
+  },
+  "time_range": {
+    "start_utc_ms": 1767225600000,
+    "end_utc_ms": 1767312000000,
+    "end_inclusive": false
+  },
+  "schema_id": "normalized-ohlcv-example-v1",
+  "interval_ms": 60000,
+  "columns": [
+    {
+      "id": "open",
+      "unit": "quote_per_base",
+      "dtype": "float64"
+    },
+    {
+      "id": "high",
+      "unit": "quote_per_base",
+      "dtype": "float64"
+    },
+    {
+      "id": "low",
+      "unit": "quote_per_base",
+      "dtype": "float64"
+    },
+    {
+      "id": "close",
+      "unit": "quote_per_base",
+      "dtype": "float64"
+    },
+    {
+      "id": "base_volume",
+      "unit": "base",
+      "dtype": "float64"
+    }
+  ],
+  "transform": {
+    "id": "joint_block_resample_proposal",
+    "version": "0.1-draft",
+    "root_seed": 20261024,
+    "scenario_index": 1,
+    "rng_identity": "to_be_pinned_at_implementation",
+    "parameters": {
+      "block_length_bars": 120
+    },
+    "joint_symbol_sampling": true,
+    "fit_scope": "train_only",
+    "requires_policy_validation": true
+  },
+  "split": {
+    "id": "split-example-v1",
+    "role": "train",
+    "source_range_frozen": true,
+    "label_horizon_bars": 5,
+    "boundary_policy": "purged_example"
+  },
+  "quality": {
+    "finality": "closed_bars",
+    "unsupported_inputs": [
+      "depth",
+      "open_interest",
+      "funding"
+    ],
+    "derived_features_recomputed": true
+  },
+  "chunks": [
+    {
+      "artifact_id": "artifact-dataset-chunk-example",
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "state": "example_placeholder"
+    }
+  ],
+  "index_columns": [
+    {
+      "id": "timestamp_utc_ms",
+      "dtype": "int64",
+      "unit": "utc_ms"
+    },
+    {
+      "id": "symbol",
+      "dtype": "dictionary_string"
+    }
+  ],
+  "availability_index_artifact_id": "availability-quality-index-example",
+  "source_capture": {
+    "normalized_original_preserved": true,
+    "heavy_payload_capture": "optional_bounded",
+    "credentials_in_capture": false
+  }
+}

@@ -1,0 +1,37 @@
+# Local Python installations and environments; recreate from the recorded locks.
+/.venv/
+/.venv-*/
+/.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+/build/
+/dist/
+
+# Future Omega runtime output. This does not remove or protect tracked files.
+/data/
+/state/
+/logs/
+/artifacts/
+/secrets/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local legacy references contain nested repositories and runtime/account data.
+# Preserve on disk; publish reviewed new Omega sources and frozen synthetic fixtures only.
+/AutoTradeMachine_Omega/
+/TEFFPSeeker/
+/binance-futures-leverage-margin-table-generator/
+/master.config.toml
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm

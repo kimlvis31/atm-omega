@@ -1,0 +1,5 @@
+include README.md .python-version
+recursive-include tests *.py *.json
+recursive-include requirements *.in *.lock *.json *.md
+recursive-include docs/examples *.toml
+recursive-include docs/design/fixtures *.json

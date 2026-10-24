@@ -1,0 +1,46 @@
+{
+  "example_only": true,
+  "schema_version": 1,
+  "status": "design_example_not_written_not_executed",
+  "hashes_are_placeholders": true,
+  "stream_id": "account-journal-example",
+  "core_epoch": "core-epoch-example",
+  "sequence": 17,
+  "event_id": "fill-observation-example",
+  "operation_id": "order-operation-example",
+  "record_type": "FillObserved",
+  "scope": {
+    "provider_id": "binance",
+    "market_id": "usdm",
+    "account_id": "account-example",
+    "instrument_id": "binance:usdm:BTCUSDT"
+  },
+  "provider_identity": {
+    "order_id": "provider-order-example",
+    "fill_id": "provider-fill-example",
+    "deduplication_scope": ["account_id", "instrument_id", "fill_id"]
+  },
+  "observed_at_utc_ms": 1792800000000,
+  "expected_account_revision": 8,
+  "payload": {
+    "side": "buy",
+    "price": "100.00",
+    "quantity": "1.000",
+    "quote_amount": "100.00000",
+    "quote_asset": "USDT",
+    "commission_amount": "0.00000",
+    "commission_asset": "USDT",
+    "numbers_are_synthetic": true
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "record_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "canonical_serialization": "to_be_pinned_by_contract_version"
+  },
+  "storage_observation": {
+    "mode": "example_placeholder",
+    "database_commit_confirmed": false,
+    "local_fsync_confirmed": false,
+    "account_transaction_replay_status": "not_executed"
+  }
+}

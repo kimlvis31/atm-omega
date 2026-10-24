@@ -1,0 +1,250 @@
+import asyncio
+
+import pytest
+
+from omega.analysis.graph import FeatureGraph, FeatureNode
+from omega.analysis.moving_averages import (
+    LegacyMaFeatures,
+    MaConfiguration,
+)
+from omega.application.collection import MinuteCollector
+from omega.application.strategies import StrategyRunner
+from omega.domain.errors import ProtocolError
+from omega.domain.models import Candle, Instrument, Market, decimal
+from omega.domain.safety import BlockReason, EntryGate
+from omega.infrastructure.binance.streams import StreamPlan
+from omega.infrastructure.candles import SqliteCandleStore
+from omega.ports.collection import MinuteObservation
+from omega.runtime.collection import CollectionWorker
+from omega.strategies.tef.strategy import TefStrategy
+
+INSTRUMENT = Instrument("binance", Market.USDM, "BTCUSDT")
+
+
+def bar(n, price="100"):
+    p = decimal(price)
+    return Candle(INSTRUMENT, n * 60_000, (n + 1) * 60_000, p, p, p, p, decimal("1"))
+
+
+def obs(n, price="100"):
+    return MinuteObservation(bar(n, price), "websocket", 600_000)
+
+
+@pytest.fixture
+def store(tmp_path):
+    value = SqliteCandleStore(tmp_path / "test.sqlite")
+    yield value
+    value.close()
+
+
+def test_reorder_dedup_gap_and_conflict_retain_original(store):
+    received = []
+    collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
+    collector.connected = True
+    assert collector.accept(obs(2), now_ms=600_000) == 0
+    assert not collector.ready(INSTRUMENT, 180_000)
+    assert collector.accept(obs(0), now_ms=600_000) == 1
+    assert collector.accept(obs(0), now_ms=600_000) == 0
+    assert collector.accept(obs(1), now_ms=600_000) == 2
+    assert received == [bar(0), bar(1), bar(2)]
+    assert collector.ready(INSTRUMENT, 180_000)
+    with pytest.raises(ProtocolError, match="conflicting"):
+        collector.accept(obs(1, "99"), now_ms=600_000)
+    assert store.get(INSTRUMENT, 60_000) == bar(1)
+    assert not collector.ready(INSTRUMENT, 180_000)
+
+
+def test_storage_commit_precedes_delivery_and_failures_keep_cursor(store):
+    def failed(candle):
+        assert store.get(INSTRUMENT, candle.open_time_ms) == candle
+        raise RuntimeError("downstream failed")
+
+    collector = MinuteCollector({INSTRUMENT: 0}, store, failed)
+    with pytest.raises(RuntimeError):
+        collector.accept(obs(0), now_ms=600_000)
+    assert collector.cursor[INSTRUMENT] == 0
+    collector.on_candle = lambda c: None
+    assert collector.accept(obs(0), now_ms=600_000) == 1
+
+
+def test_reorder_bound_and_open_minute(store):
+    collector = MinuteCollector({INSTRUMENT: 0}, store, lambda c: None, max_pending=1)
+    collector.accept(obs(1), now_ms=600_000)
+    with pytest.raises(ProtocolError, match="capacity"):
+        collector.accept(obs(2), now_ms=600_000)
+    with pytest.raises(ProtocolError, match="future"):
+        collector.accept(obs(0), now_ms=30_000)
+
+
+def test_persistence_raw_duplicate_restart_and_market_identity(tmp_path):
+    path = tmp_path / "new.sqlite"
+    store = SqliteCandleStore(path)
+    assert store.put(MinuteObservation(bar(0), "rest", 60_000))
+    assert not store.put(MinuteObservation(bar(0), "websocket", 60_002, '{"original":true}'))
+    assert store.connection.execute("SELECT raw FROM minutes").fetchone()[0] == '{"original":true}'
+    spot = Instrument("binance", Market.SPOT, "BTCUSDT")
+    c = bar(0)
+    assert store.put(
+        MinuteObservation(
+            Candle(spot, 0, 60_000, c.open, c.high, c.low, c.close, c.volume), "rest", 60_000
+        )
+    )
+    store.close()
+    reopened = SqliteCandleStore(path)
+    assert reopened.get(INSTRUMENT, 0) == bar(0)
+    assert reopened.get(spot, 0).instrument == spot
+    reopened.close()
+
+
+class History:
+    def __init__(self, rows):
+        self.rows, self.calls = rows, []
+
+    def closed_minutes(self, instrument, start_ms, end_ms, *, now_ms):
+        self.calls.append((start_ms, end_ms))
+        return tuple(c for c in self.rows if start_ms <= c.open_time_ms < end_ms)
+
+
+def test_gap_repair_auto_data_recovery_preserves_manual_pause(store):
+    gate = EntryGate()
+    gate.recovered(BlockReason.RESTART)
+    gate.resume(reconciled=True, durable=True)
+    gate.block(BlockReason.PAUSE)
+
+    def health(ready, reason):
+        gate.recovered(BlockReason.DATA) if ready else gate.block(BlockReason.DATA)
+
+    received = []
+    collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
+    collector.connected = True
+    history = History([bar(0), bar(2)])
+    worker = CollectionWorker(
+        StreamPlan(Market.USDM, (INSTRUMENT,)),
+        history,
+        collector,
+        clock_ms=lambda: 180_002,
+        on_health=health,
+    )
+    asyncio.run(worker.repair())
+    worker.health("gap")
+    assert received == [bar(0)] and BlockReason.DATA in gate.reasons
+    history.rows.append(bar(1))
+    asyncio.run(worker.repair())
+    worker.health("gap")
+    assert received == [bar(0), bar(1), bar(2)]
+    assert gate.reasons == {BlockReason.PAUSE}
+
+
+def test_no_data_no_spin_and_strategy_pipeline_shared_for_100_instances(store):
+    graph = FeatureGraph(
+        (
+            FeatureNode(
+                "ma",
+                LegacyMaFeatures(
+                    INSTRUMENT, (MaConfiguration(0, mmacd_periods=(2, 4), signal_period=2),)
+                ),
+            ),
+        )
+    )
+    runner = StrategyRunner(
+        graph, {str(n): TefStrategy("MMACDDEFAULT", INSTRUMENT) for n in range(100)}
+    )
+    collector = MinuteCollector({INSTRUMENT: 0}, store, runner.update)
+    history = History([bar(n, str(100 + (n % 7))) for n in range(100)])
+    worker = CollectionWorker(
+        StreamPlan(Market.USDM, (INSTRUMENT,)), history, collector, clock_ms=lambda: 6_000_002
+    )
+    asyncio.run(worker.repair())
+    assert collector.cursor[INSTRUMENT] == 6_000_000
+    assert len(runner.signals) == 100
+    assert len({s.target_exposure for s in runner.signals.values()}) == 1
+    assert all(s.available_at_ms == 6_000_000 for s in runner.signals.values())
+    history.rows.clear()
+    worker.clock_ms = lambda: 6_120_002
+    calls = len(history.calls)
+    asyncio.run(worker.repair())
+    assert len(history.calls) == calls + 1
+    assert collector.cursor[INSTRUMENT] == 6_000_000
+
+
+def test_worker_stop_interrupts_idle_receive_and_marks_disconnected(store):
+    async def scenario():
+        entered = asyncio.Event()
+
+        class Socket:
+            closed = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                self.closed = True
+
+            async def recv(self):
+                entered.set()
+                await asyncio.Event().wait()
+
+        socket = Socket()
+        stop = asyncio.Event()
+        collector = MinuteCollector({INSTRUMENT: 0}, store, lambda c: None)
+        worker = CollectionWorker(
+            StreamPlan(Market.USDM, (INSTRUMENT,)),
+            History([]),
+            collector,
+            connect=lambda p: socket,
+            clock_ms=lambda: 0,
+        )
+        task = asyncio.create_task(worker.run(stop))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        assert socket.closed and not collector.connected
+
+    asyncio.run(scenario())
+
+
+def test_store_failure_does_not_publish_or_advance():
+    received = []
+
+    class FailedStore:
+        def put(self, observation):
+            raise OSError("disk full")
+
+    collector = MinuteCollector({INSTRUMENT: 0}, FailedStore(), received.append)
+    with pytest.raises(OSError, match="disk full"):
+        collector.accept(obs(0), now_ms=600_000)
+    assert received == [] and collector.cursor[INSTRUMENT] == 0
+    assert not collector.ready(INSTRUMENT, 60_000)
+
+
+def test_worker_reconnects_read_only_transport_failure_and_stops_backoff(store):
+    async def scenario():
+        from omega.domain.errors import TransportError
+
+        entered = asyncio.Event()
+
+        class Disconnected:
+            async def __aenter__(self):
+                entered.set()
+                raise TransportError("connection lost")
+
+            async def __aexit__(self, *args):
+                pass
+
+        stop = asyncio.Event()
+        collector = MinuteCollector({INSTRUMENT: 0}, store, lambda c: None)
+        worker = CollectionWorker(
+            StreamPlan(Market.USDM, (INSTRUMENT,)),
+            History([]),
+            collector,
+            connect=lambda p: Disconnected(),
+            clock_ms=lambda: 0,
+        )
+        task = asyncio.create_task(worker.run(stop))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await asyncio.sleep(0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        assert not collector.connected
+
+    asyncio.run(scenario())

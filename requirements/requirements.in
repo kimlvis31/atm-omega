@@ -1,0 +1,2 @@
+# Standard discovery entry for dependency maintenance tools.
+-r dev.in

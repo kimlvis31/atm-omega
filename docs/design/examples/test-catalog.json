@@ -1,0 +1,1163 @@
+{
+  "example_only": true,
+  "catalog_version": 5,
+  "test_execution_status": "not_run",
+  "case_count": 130,
+  "cases": [
+    {
+      "id": "FS01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "시장 row/range insert 뒤 압축 SQL 오류",
+      "expected_behavior": "insert/range의 commit 경계가 명확하며 미저장 coverage를 성공 통지하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "commit 실패 또는 결과 불명, 이어서 동일 batch 재시도",
+      "expected_behavior": "rollback/대조 후 idempotent 저장. buffer가 사라지거나 중복 row가 생기지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "commit 직전/직후 process 종료, ACK 유실",
+      "expected_behavior": "재기동 시 durable watermark 대조. 성공 ACK가 없어도 동일 batch 재처리 안전",
+      "tier": "critical"
+    },
+    {
+      "id": "FS04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "DB worker에 지속 작업 유입",
+      "expected_behavior": "trade/report/data별 최대 flush age와 batch 공정성 검증. 앞 작업이 뒤 flush를 영구 기아시키지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "요청 구간에 정상·결측·dummy 혼재",
+      "expected_behavior": "partial/missing 구분. 실제 저장 coverage와 quality 일치, strategy별 required input gate 적용",
+      "tier": "critical"
+    },
+    {
+      "id": "FS06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "정렬 안 된 동일·포함·인접·중첩 range",
+      "expected_behavior": "합집합의 교환/결합/멱등성, 실제 데이터 coverage와 일치",
+      "tier": "critical"
+    },
+    {
+      "id": "FS07",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "snapshot과 첫 delta 불일치, 후속 pu 단절, 재연결 중 역순/중복",
+      "expected_behavior": "불신 상태→resnapshot, 잘못 이어 붙인 book으로 신규 진입 판단하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS08",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "bid 또는 ask가 모두 삭제된 뒤 다시 추가, 없는 level 삭제",
+      "expected_behavior": "예외 없이 empty/valid 상태 전환. stale best bid/ask를 현재 값으로 사용하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS09",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "base/quote precision 다름, tick=0.05/step=0.005, batch·incremental 집계",
+      "expected_behavior": "단위/허용 grid 정확. rounding·누적 오차 및 batch/stream 계약 일치",
+      "tier": "critical"
+    },
+    {
+      "id": "FS10",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "음수 월 이동·연도 경계·윤년·week/DST 표시·wall clock 점프",
+      "expected_behavior": "UTC event window 일치, deadline은 monotonic 기준, calendar의 역연산 성질",
+      "tier": "critical"
+    },
+    {
+      "id": "FS11",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "live와 backfill이 같은 candle/trade를 중복·다른 순서로 공급, 과거 정정",
+      "expected_behavior": "결정적 source/version 선택. feature invalidation/replay 범위와 checksum 일치",
+      "tier": "critical"
+    },
+    {
+      "id": "FS12",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "stale/늦은 metric, NaN, 대형 backfill, API 제한",
+      "expected_behavior": "이용 가능 시점 이전 입력 금지. 진입 gate·private 경로 budget·bounded buffer 동작",
+      "tier": "critical"
+    },
+    {
+      "id": "FS13",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "1@100 이후 1@110, 누적 평균 100→105",
+      "expected_behavior": "총 체결 명목액 210. 증분 가격·진입가·fee/PnL가 누적 평균 오용 없이 일치",
+      "independent_fixture": {
+        "contract": "linear",
+        "fee": "0",
+        "events": [
+          {
+            "type": "cumulative_fill",
+            "quantity": "1",
+            "quote": "100",
+            "average_price": "100"
+          },
+          {
+            "type": "cumulative_fill",
+            "quantity": "2",
+            "quote": "210",
+            "average_price": "105"
+          }
+        ],
+        "expected": {
+          "position_quantity": "2",
+          "cumulative_quote": "210",
+          "average_entry": "105",
+          "incremental_second_fill_price": "110"
+        }
+      },
+      "tier": "critical"
+    },
+    {
+      "id": "FS14",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "같은 fill 재전송, 누적 응답 역전, REST/WS 이중 수신",
+      "expected_behavior": "fill ID별 정확히 한 번 효과. ledger/position이 과거 상태로 되돌아가지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS15",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "부분 청산·포지션 반전·다른 수수료 자산·funding/외부 잔고 변화",
+      "expected_behavior": "수량·잔고 보존과 독립 손익 계산. fill 외 ledger 항목을 이중 반영하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS16",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "create→partial fill→cancel 요청→최종 fill→cancel 응답",
+      "expected_behavior": "실제 terminal 상태와 fill 모두 반영. 원 create/cancel RPC 정리. 남은 예약액 정확",
+      "tier": "critical"
+    },
+    {
+      "id": "FS17",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "즉시 응답, callback 예외, send 실패, timeout 뒤 늦은 응답/ID 재사용",
+      "expected_behavior": "handler 등록 경합·유실·누수 없음. late response가 새 요청을 완료시키지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS18",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "거래소 수락 후 timeout/503 UNKNOWN, 재시도 요청",
+      "expected_behavior": "생성 여부 조회 전 무조건 중복 제출하지 않음. 확인될 때까지 UNKNOWN·자본 예약 유지",
+      "tier": "critical"
+    },
+    {
+      "id": "FS19",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "조회 한 페이지를 넘는 fill, 조회 중 신규 fill 도착",
+      "expected_behavior": "cursor/watermark와 overlap/dedup으로 누락 없이 회계 반영",
+      "tier": "critical"
+    },
+    {
+      "id": "FS20",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "제출 전·거래소 수락 뒤·fill commit 전후 crash, 이전 gateway 지연 응답",
+      "expected_behavior": "journal/거래소 대조와 fencing/epoch 검사, 중복 주문 방지. 완료 후 수동 재개 대기",
+      "tier": "critical"
+    },
+    {
+      "id": "FS21",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "열린 포지션의 market/private stream/DB/feature 장애, 데이터만의 장애에서 부분/전체 복구·재장애",
+      "expected_behavior": "영향 범위 진입 차단·보호/조회 지속. 데이터만의 장애는 모든 복구 조건 충족 시 자동 재개, 일부 입력만 복구되면 제한 유지. 다른 장애 자동 해제로 확대 안 함, 오래된 signal 재전송 없음·알림 기록",
+      "tier": "critical"
+    },
+    {
+      "id": "FS22",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "사용자 정지와 feed 복구의 경합, 복구 도중 새 장애/restart, 오래된 recovery/resume",
+      "expected_behavior": "현재 epoch/revision으로 적용. 데이터 reason만 제거, 사용자 정지/재시작 latch와 다른 원인 유지. 그 제한은 명시적 수동 재개·현재 readiness 없이는 해제 안 함",
+      "tier": "critical"
+    },
+    {
+      "id": "FS23",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "가용 1,000에 두 종목이 각각 700 예약 요구, 취소 중 부분 체결",
+      "expected_behavior": "합계 예약이 가용 자본 초과하지 않음. 정해진 배분/우선순위와 최종 예약 해제 검증",
+      "independent_fixture": {
+        "available_margin": "1000",
+        "requested_reservations": [
+          "700",
+          "700"
+        ],
+        "invariant": "sum(accepted_reservations) <= available_margin",
+        "allocation_policy": "must_be_defined_by_portfolio_spec"
+      },
+      "tier": "critical"
+    },
+    {
+      "id": "FS24",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "설정 손상·저장 실패·다중 spawn·READY 미도달",
+      "expected_behavior": "외부 주문 전 검출. false 성공·무기한 대기·child별 설정 불일치 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS25",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "CPU/GPU에 같은 NaN/level crossing/청산 동시 터치/정밀도 경계 입력",
+      "expected_behavior": "지원 범위의 명세 일치. 수치 tolerance와 거래 분기 차이를 따로 검증",
+      "tier": "critical"
+    },
+    {
+      "id": "FS26",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "GUI crash·중복 GUI·snapshot 중 event, 느린 UI",
+      "expected_behavior": "core 생존, 단일 GUI, 재동기화·backpressure·lease 회수, 주문 중복 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "FS27",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "모바일 명령 중복/역순/만료/권한 철회/응답 유실",
+      "expected_behavior": "권한·epoch·operation ID 검증. 요청 접수와 실제 적용 상태 구분",
+      "tier": "critical"
+    },
+    {
+      "id": "FS28",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-pipeline-safety.md",
+      "scenario": "push 지연/유실, 휴대폰 offline, 알림 service 장애",
+      "expected_behavior": "자동 safety gate가 휴대폰 응답을 기다리지 않음. event 보존과 재조회·알림 재시도 가능",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "gui key 생략/false/true",
+      "expected_behavior": "생략과 false는 headless. true만 READY 뒤 launch. 이미 열린 GUI는 추가 생성하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "GUI crash 또는 launcher 실패",
+      "expected_behavior": "core 작업·설정·데이터 소유권 유지, 오류 진단 가능",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "TOML 손상, type/range 오류, 알 수 없는 schema",
+      "expected_behavior": "외부 주문 이전에 검출. 조용한 기본값 덮어쓰기 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "여러 child spawn",
+      "expected_behavior": "parent/child의 revision 일치, child import로 파일 변경 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "runtime/staged 설정 변경 중 disk 오류",
+      "expected_behavior": "기존 revision 보존, 실패 응답. 저장되지 않은 값을 적용 성공으로 표시하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "다른 cwd·다른 명시적 config·동시 기동",
+      "expected_behavior": "root 기준 경로 해석, instance/lock 구분, 설정 혼선 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG07",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "restart-required key를 GUI에서 변경",
+      "expected_behavior": "live 상태를 중간에 바꾸지 않고 적용 시점과 재시작 필요 표시",
+      "tier": "critical"
+    },
+    {
+      "id": "CFG08",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/omega-master-configuration.md",
+      "scenario": "secret·민감 payload",
+      "expected_behavior": "일반 설정 snapshot·GUI·로그 export에 원문 유출 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "RT01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "supervisor 사망 뒤 이전 gateway가 살아 있고 새 core가 시작",
+      "expected_behavior": "이전 owner lease/epoch를 대조하고 새 위험 중복 전송 방지. 이미 거래소에 도착한 요청은 별도 reconcile"
+    },
+    {
+      "id": "RT02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "worker가 drain에 응답하지 않음",
+      "expected_behavior": "종료 기한·강제 회수 fallback이 유한하고 미완료 job/미확정 주문 상태를 기록"
+    },
+    {
+      "id": "RT03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "여러 GUI launcher를 동시에 호출",
+      "expected_behavior": "동일 instance GUI는 하나. lock을 launcher 조기 종료로 잘못 해제하지 않음"
+    },
+    {
+      "id": "RT04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "idle 검사와 wait 사이에 입력 도착",
+      "expected_behavior": "lost wake 없이 처리. 불필요한 1ms scan으로만 문제를 숨기지 않음"
+    },
+    {
+      "id": "RT05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "최대 10계정/약 100전략, 공유/비공유 feature·동시 burst·batch/NN/native thread 큰 병렬 수·계정 증감",
+      "expected_behavior": "공유 계산/구독·계정별 상태 격리·전체 budget/admission·live 여유 유지. IP/인증 scope/group/weight 한도와 계정 간 fairness, 재배분 시 in-flight/사용량 보존. 100개 대형 NN 처리 보장으로 오인 안 함"
+    },
+    {
+      "id": "RT06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "snapshot 전송 중 buffer 초과·client 재연결",
+      "expected_behavior": "cursor gap을 탐지하고 resnapshot. 조용한 state 누락·거래 loop block 없음"
+    },
+    {
+      "id": "FT01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "N-1/N/N+1 warmup과 flat/zero volume/NaN",
+      "expected_behavior": "valid 시점·중립/invalid 정책이 명세와 일치. batch/stream 결과 대조"
+    },
+    {
+      "id": "FT02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "같은 candle 중복, 확정 뒤 정정, 상태 restore",
+      "expected_behavior": "중복 누적 없음, 올바른 suffix invalidate/replay, 새 revision"
+    },
+    {
+      "id": "FT03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "NNA config만 켜고 PSAR 없음",
+      "expected_behavior": "NN lookback을 자기 schema/model에서 계산. 잘못된 PSAR key 의존 없음"
+    },
+    {
+      "id": "FT04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "GUI 없이 analysis/strategy registry load",
+      "expected_behavior": "계산 module 등록 가능. presentation 미설치가 계산 실패를 만들지 않음"
+    },
+    {
+      "id": "FT05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "순환 dependency·같은 node 중복·다른 config 같은 이름",
+      "expected_behavior": "cycle 거절, 동일 identity 재사용, 다른 config는 별도 state"
+    },
+    {
+      "id": "FT06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "stable field ID는 같고 번역/column 표시 순서만 변경",
+      "expected_behavior": "계산 입력 의미 유지. flatten schema가 GUI 순서 때문에 바뀌지 않음"
+    },
+    {
+      "id": "DS01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "normalized DB export를 raw wire로 요청",
+      "expected_behavior": "실제 보존 여부/표현을 구분. 확보하지 않은 원본 bytes를 있다고 표시하지 않음"
+    },
+    {
+      "id": "DS02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "같은 source/spec/seed를 다른 worker 수·순서로 생성",
+      "expected_behavior": "선언한 재현 범위에서 같은 시나리오·hash. scenario ID와 RNG/version 기록"
+    },
+    {
+      "id": "DS03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "다종목 block sampling",
+      "expected_behavior": "모든 종목에 같은 joint block index 적용. 상관계수가 정확히 원본과 같다는 잘못된 기대값은 사용하지 않음"
+    },
+    {
+      "id": "DS04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "split 경계에서 label/lookback이 넘어감",
+      "expected_behavior": "train/holdout source 혼입 방지, purge/context 정책을 명시하고 검증"
+    },
+    {
+      "id": "DS05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "OHLC 전용 transform에 depth/OI 필수 module 연결",
+      "expected_behavior": "미지원 조합 명시적 오류. 원래 절대값을 생성 가격에 그대로 붙이지 않음"
+    },
+    {
+      "id": "DS06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "export chunk hash 오류·disk full·취소/재시도",
+      "expected_behavior": "incomplete와 committed 구분. 정상 source/기존 artifact 보존, 성공 manifest 오발표 없음"
+    },
+    {
+      "id": "NN01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "외부 .py import 실패·GPU 초기화 실패·환경 없음",
+      "expected_behavior": "해당 module/instance/job 오류, GUI/core는 생존하고 원인 조회 가능"
+    },
+    {
+      "id": "NN02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "train 값 1,3, validation 값 100으로 mean fit",
+      "expected_behavior": "train fit mean은 2. validation이 fit에 섞이지 않음. module 전처리 보고와 상태 일치"
+    },
+    {
+      "id": "NN03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "독립 sample 추론 capability의 같은 입력을 단독/다른 batch/순서로 예측",
+      "expected_behavior": "inference 계약상 일치. batch 축 Softmax 오류 검출. stateful/cross-sample task는 별도 계약"
+    },
+    {
+      "id": "NN04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "고정 topology 학습 중 weight 갱신·checkpoint 저장·미지원 층 변경 요청",
+      "expected_behavior": "구조 ID/node/edge/shape 불변·weight/checkpoint version 연결. dynamic capability 없는 변경은 미지원으로 명시, 자동 구조 변경 엔진을 요구하지 않음"
+    },
+    {
+      "id": "NN05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "model/source/feature/preprocessor hash가 배포 후보와 불일치",
+      "expected_behavior": "deployment 거절 또는 명시적 재검증. live model을 조용히 교체하지 않음"
+    },
+    {
+      "id": "NN06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "training cancel·checkpoint 저장 실패·resume",
+      "expected_behavior": "committed checkpoint만 복원, optimizer/RNG 지원 범위·parent run 기록"
+    },
+    {
+      "id": "NN07",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "module이 구조/tensor 요약을 제공하지 않음",
+      "expected_behavior": "미제공 표시, 임의 구조·gradient를 만들어내지 않음. 외부 reader도 상태 인식"
+    },
+    {
+      "id": "NN08",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "metric burst·NaN metric·상세 record writer 지연",
+      "expected_behavior": "sampling/invalid 정책·backpressure 기록. 핵심 run identity/결과를 debug log와 혼동하지 않음"
+    },
+    {
+      "id": "SM01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "shared-margin portfolio인데 GPU capability 미지원, mode=AUTO",
+      "expected_behavior": "CPU 선택과 이유 기록. 종목별 독립 계산 합산으로 대체하지 않음"
+    },
+    {
+      "id": "SM02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "같은 미지원 조합에서 mode=GPU",
+      "expected_behavior": "시작 전 명확한 미지원 사유. 사용자 선택을 숨기고 CPU 성공이라고 표시하지 않음"
+    },
+    {
+      "id": "SM03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "같은 MC dataset을 서로 다른 명시적 intrabar path spec으로 simulation",
+      "expected_behavior": "dataset 재무작위화 없음·input hash 일치, 봉 내부 가정은 별도 path/seed/spec으로 기록되고 source OHLC 유지"
+    },
+    {
+      "id": "SM04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "동일 spec의 summary/full trace 재생",
+      "expected_behavior": "공통 metric·최종 회계 일치. MDD와 residual sigma, wallet과 equity의 의미 구분"
+    },
+    {
+      "id": "SM05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "float32/64 차이가 임계값 근처 주문 분기를 바꿈",
+      "expected_behavior": "수치 tolerance 외에 decision 차이로 보고. 최종 잔고만 비슷하다고 pass하지 않음"
+    },
+    {
+      "id": "SM06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "후보 score 정체·termination threshold 0·OOM·checkpoint resume",
+      "expected_behavior": "hard limit·명시적 실패/재시도·attempt 분리. warmup 실패로 원본 기간이 줄어들지 않음"
+    },
+    {
+      "id": "UI01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "작은 창/큰 글꼴/subpage splitter 반복 조절",
+      "expected_behavior": "minimum/flow/scroll 규칙 준수. 누락 resize method 오류 없음"
+    },
+    {
+      "id": "UI02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "긴 번역 label·누락 key·theme 변경·font fallback·아이콘 배율/disabled 전환",
+      "expected_behavior": "계산 ID 불변, fallback과 자동 배치, SVG cache 갱신/유한 크기·대비·접근성 label·재생성 후 리소스 누수 점검"
+    },
+    {
+      "id": "UI03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "core offline→새 epoch 재접속·늦은 callback",
+      "expected_behavior": "stale 상태 표시, 새 snapshot 적용, 이전 세션 응답이 현재 화면/명령 상태를 오염시키지 않음"
+    },
+    {
+      "id": "UI04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "줌 아웃 LOD·overlay·원본 data fetch",
+      "expected_behavior": "표시 축약과 거래 판단 원본 분리. timestamp/가격 mapping·selection 의미 유지"
+    },
+    {
+      "id": "UI05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "NN/Simulation page를 닫았다 다시 열기",
+      "expected_behavior": "core job 지속, run ID로 진행/결과 재조회, 중복 작업 제출 없음"
+    },
+    {
+      "id": "UI06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "알 수 없는 module output field/renderer·구독 중 페이지 폐기·icon asset 누락/배포 환경",
+      "expected_behavior": "supported fallback/오류 표시, 폐기 객체 callback 차단, DataRef lease 회수. 누락 icon이 GUI 전체 종료를 만들지 않음, offline bundle/license 포함 확인"
+    },
+    {
+      "id": "MB01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "휴대폰 offline·push 지연/중복·relay 단절",
+      "expected_behavior": "core safety 동작 지속. 재연결 시 최신 incident/state 조회"
+    },
+    {
+      "id": "MB02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "명령 대기 중 device 권한 철회",
+      "expected_behavior": "적용 시 권한 revision 재검사. 철회 이후 미적용 제어가 실행되지 않음"
+    },
+    {
+      "id": "MB03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "같은 operation 재전송 또는 같은 ID에 다른 payload",
+      "expected_behavior": "같은 결과 조회/멱등 처리, payload conflict 거절"
+    },
+    {
+      "id": "MB04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "pairing code 만료·재사용·다른 instance·무권한 scope",
+      "expected_behavior": "등록/명령 거절, 감사 가능, push token만으로 제어 불가"
+    },
+    {
+      "id": "MB05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "오래된 알림의 resume·이전 epoch·만료된 offline 명령",
+      "expected_behavior": "현재 safety/control revision/epoch로 거절·재조회. 수동 재개 조건 우회 없음"
+    },
+    {
+      "id": "MB06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "GUI와 mobile이 동시에 pause/resume",
+      "expected_behavior": "core의 명시적 순서/revision과 gate로 하나의 상태 결정. 두 client 표시 수렴"
+    },
+    {
+      "id": "OB01",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "두 client가 같은 settings revision을 수정",
+      "expected_behavior": "conflict 탐지와 현재 값 재조회. last-writer 우연 덮어쓰기 방지"
+    },
+    {
+      "id": "OB02",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "size/date rotation과 retention이 동시에 도래",
+      "expected_behavior": "collector 단일 writer, closed file만 정리, 허용 root 바깥 삭제 없음"
+    },
+    {
+      "id": "OB03",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "wall clock 점프·timezone 표시 변경",
+      "expected_behavior": "deadline/cleanup 주기 계산과 날짜 partition 기준 구분. 잘못된 대량 삭제 없음"
+    },
+    {
+      "id": "OB04",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "diagnostic level off·queue 포화",
+      "expected_behavior": "diagnostic 정책과 durable fill/ledger·실험 기록 분리. drop 수량 관측"
+    },
+    {
+      "id": "OB05",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "참조 중 model/dataset/checkpoint에 보관 기한 도래",
+      "expected_behavior": "reference/lease 정책에 따라 보호 또는 명시적 보류. dangling artifact 생성 안 함"
+    },
+    {
+      "id": "OB06",
+      "status": "planned_not_implemented_not_run",
+      "tier": "required_per_capability",
+      "source_spec": "docs/design/extended-test-cases.md",
+      "scenario": "backup restore 후 core 시작",
+      "expected_behavior": "schema/ledger/cursor 대조·새 epoch·수동 재개 대기, GUI 없이도 운영 상태 조회 가능"
+    },
+    {
+      "id": "MX01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "동일 symbol의 현물/선물·다른 broker 계정·KRW/USDT",
+      "expected_behavior": "identity/원장/단위 분리, 시세 중복 합산 없음",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "OI 필수 전략을 현물에서 실행",
+      "expected_behavior": "시작 전 capability 거절, OI=0/보간으로 우회하지 않음",
+      "tier": "critical"
+    },
+    {
+      "id": "MX03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "provider마다 금액/수량 기반 주문 의미가 다른 market buy",
+      "expected_behavior": "올바른 단위와 reservation, 지원하지 않는 주문 조합 거절",
+      "tier": "critical"
+    },
+    {
+      "id": "MX04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "업비트 무체결·휴장·단절·원인 불명 혼합",
+      "expected_behavior": "원인 분리, 확인되지 않은 무체결 생성 없음, 분모 정확",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "미래 anchor·NN split 바깥 값으로 gap 보간",
+      "expected_behavior": "causal replay/live 차단, train/holdout 누출 검출",
+      "tier": "critical"
+    },
+    {
+      "id": "MX06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "짧은 gap/긴 gap·이동 window·분모 0",
+      "expected_behavior": "정책별 repair/warn/block·비율/최장 gap/N/A 정확",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX07",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "보간 후 늦은 원본 backfill·재시도",
+      "expected_behavior": "새 revision, immutable dataset 보존, feature 무효화",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX08",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "미확인 fill/balance 또는 book sequence gap",
+      "expected_behavior": "회계 보간 금지·신규 위험 제한, book 재동기화",
+      "tier": "critical"
+    },
+    {
+      "id": "MX09",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "synthetic OHLC·모르는 volume·MC와 repair 조합",
+      "expected_behavior": "불변량/mask/lineage 유지, synthetic candle을 실제 체결 근거로 사용하지 않음",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX10",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "현물 SHORT·결제/주문가능 현금 차이·세금/fee asset",
+      "expected_behavior": "상품별 risk/ledger, 허용되지 않는 공매도/중복 자본 사용 거절",
+      "tier": "critical"
+    },
+    {
+      "id": "MX11",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "실제 관측률 낮은 장기간과 최신 입력 stale",
+      "expected_behavior": "평균 repair 비율만으로 허용 안 함, lookback/age 품질 보고",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "MX12",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/market-adapters-and-quality.md",
+      "scenario": "삼성 API 미확인 또는 계정 권한 없는 adapter 등록",
+      "expected_behavior": "모듈 등록과 live-ready 분리, fake 성공·주문 우회 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "PO01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "사용자 정지 후 기존 제출/UNKNOWN 주문의 late ACK·partial/full fill",
+      "expected_behavior": "신규 위험 전송 차단, 기존 주문 유지·대조·fill/예약량 반영, 정지를 취소로 오인 안 함",
+      "tier": "critical"
+    },
+    {
+      "id": "PO02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "열린 포지션 종료 세 선택·부분 청산·취소/fill 경합·저장 실패·시장 폐장",
+      "expected_behavior": "선택별 side effect 정확, 미완료/저장 실패를 완료라고 표시 안 함, 무관한 외부 보유분 정리 금지",
+      "tier": "critical"
+    },
+    {
+      "id": "PO03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "외부 수동 증감/반전/청산·지연된 자체 fill·funding·여러 전략이 같은 순포지션 공유",
+      "expected_behavior": "외부 개입과 내부 관측 구분, 해당 실제 포지션 자동 제어 중단·재진입 방지·알림/로그, 다른 gate 보존",
+      "tier": "critical"
+    },
+    {
+      "id": "PO04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "one-way/cross/isolated·서로 반대 전략 target·외부 hedge 설정",
+      "expected_behavior": "계정 상품당 순포지션 하나, 지원 mode별 margin/risk 검증, 몰래 hedge/mode 전환 안 함",
+      "tier": "critical"
+    },
+    {
+      "id": "PO05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "확정 1분 입력의 상위 집계·결측/정정·세션 경계·마감 후 새 signal",
+      "expected_behavior": "집계 불변량/품질·available time 유지, 1분 내부 경로 모호함 표시, 마감 뒤 주문에 과거 high/low 사용 금지",
+      "tier": "critical"
+    },
+    {
+      "id": "PO06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "NN exception/OOM/timeout/NaN/잘못된 shape·늦은 응답·정상 보류",
+      "expected_behavior": "의존 신규 진입 차단·옛 모델 자동 교체 없음, 정상 보류/예측 오차를 기술 오류로 오인 안 함",
+      "tier": "critical"
+    },
+    {
+      "id": "PO07",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "local TEF/FSL 조건·GUI 종료·core/통신 장애·외부 개입",
+      "expected_behavior": "거래소 측 조건부 보호 주문 미생성, local 청산과 구분, 불가 상태 표시·외부 개입 포지션 자동 청산 중단",
+      "tier": "critical"
+    },
+    {
+      "id": "PO08",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "MC 원본/생성 조합과 offline viewer·3D 대형 graph",
+      "expected_behavior": "원본/lineage 보존·미지원 조합 명시, core/key 없이 viewer 사용, 요약/필터·임의 코드 자동 실행 없음",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "PO09",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "GUI off·일반/critical 중복 event·음성 engine/tray 없음·반복 확인",
+      "expected_behavior": "독립 agent dedup, 일반 1회/critical 반복, voice queue 상한·fallback·장애와 확인 분리, trading loop 무관",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "PO10",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/operating-policy-details.md",
+      "scenario": "Windows/Linux 수동 시작·Triton 없는 환경·GUI autostart false",
+      "expected_behavior": "부팅 등록 없음, 지원 core/CPU 경로 가능, GPU backend 미지원 명시·GUI/desktop agent 수명 구분",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "IP01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "양봉/음봉/도지의 두 route·flat·중복 knot·잘못된 timing",
+      "expected_behavior": "선택 경로/경우가 적용되고 OHLC·시간/가격 불변량 유지, invalid 설정 거절",
+      "tier": "critical"
+    },
+    {
+      "id": "IP02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "마감 후 주문·주문 지연·봉 내부 NN/상위 집계 접근",
+      "expected_behavior": "과거 H/L 체결·final OHLC 누출 없음, 전략 1분 cadence 유지",
+      "tier": "critical"
+    },
+    {
+      "id": "IP03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "여러 전략·공유 자본·다른 worker 수/순서의 random path",
+      "expected_behavior": "instrument/scenario당 경로 일관, seed 재현·CPU/GPU 비교 가능 범위 명시",
+      "tier": "critical"
+    },
+    {
+      "id": "IP04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "Settings 변경·Setup override·기존 run 재조회·비용 on/off",
+      "expected_behavior": "최종 spec 고정, 가정 차이 표시, 실거래 비용을 근사값으로 덮어쓰지 않음",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "IP05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "DB commit ACK 유실·JSONL 대체 기록·복구 replay",
+      "expected_behavior": "event별 한 번 회계 반영, local success/DB commit 구분, 주문 재전송 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "IP06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/intrabar-and-storage-fallback.md",
+      "scenario": "DB와 JSON 기록 모두 불가·권한/읽기 전용/I/O 오류·절반 record·복구 및 crash·수동 개입",
+      "expected_behavior": "신규 위험 차단·가능한 기존 local 관리/조회·critical 반복 알림, durable commit 대기로 알람 차단 안 함. 손상/미반영 segment 보호·가짜 내구 ACK 없음·수동 개입 재인수/중복 청산 방지, 복구 후 기록 gap 대조",
+      "tier": "critical"
+    },
+    {
+      "id": "CA01",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "DATA+STORAGE+MANUAL reason 중 데이터만 회복·이전 epoch recovery 도착",
+      "expected_behavior": "DATA reason만 제거, 저장/수동 latch 유지·늦은 callback 거절",
+      "tier": "critical"
+    },
+    {
+      "id": "CA02",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "DB/JSON 불가 중 GUI/mobile PauseNewRisk와 pending 제출 경합",
+      "expected_behavior": "진입은 즉시 차단·applied_volatile, 이미 전송/UNKNOWN은 대조·내구 성공 오표시 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA03",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "critical 확인·복구·악화·GUI 종료·정상 outbox 재등장",
+      "expected_behavior": "확인은 해당 revision 소리만 중단, gate 불변·새 악화 재알림·중복음 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA04",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "외부 개입 후 data recovery/ResumeTrading/재인수·중간 수동 fill",
+      "expected_behavior": "일반 resume로 관리권 복구 안 됨, 현재 position/control revision 재검사·명시 재인수",
+      "tier": "critical"
+    },
+    {
+      "id": "CA05",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "두 전략이 같은 one-way 포지션 전권 binding 요청·반대 target",
+      "expected_behavior": "기본 exclusive conflict 검출, 명시 coordinator/combiner 없으면 몰래 hedge/netting 안 함",
+      "tier": "critical"
+    },
+    {
+      "id": "CA06",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "같은 분에 여러 계정/종목 target·부분 체결·대기 중 감소 주문",
+      "expected_behavior": "stable 순서/reservation으로 같은 자본/포지션 수량 이중 사용 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA07",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "1분 final 지연/정정·상위 진행봉·다른 path/worker 수",
+      "expected_behavior": "input watermark/finality·available time 유지, 소급 신규 체결/전략 재평가 중복 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA08",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "global recording 설정 변경·run override·실행 중 profile 변경",
+      "expected_behavior": "frozen run spec 또는 명시 기록 revision, 핵심/선택 기록 실패 정책 구분",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "CA09",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "capture off/on·private 인증 payload·MC 원본 retention",
+      "expected_behavior": "normalized 원본/lineage 유지, credential 제외·선택 payload만 보관·필수 journal retention과 분리",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "CA10",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "settings local commit·DB mirror 실패·두 client 동시 수정",
+      "expected_behavior": "하나의 authority/revision, stored/applied/mirrored 상태 구분·conflict 검출",
+      "tier": "critical"
+    },
+    {
+      "id": "CA11",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "고정 topology bundle·허위 shape/거대 graph·악성 path/pickle checkpoint",
+      "expected_behavior": "구조 고정/요약 표시·한도 검사, viewer가 module/checkpoint code 자동 실행 안 함",
+      "tier": "required_per_capability"
+    },
+    {
+      "id": "CA12",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "같은 fill ID가 다른 symbol/provider/account에 존재·누적/개별 관측 혼합",
+      "expected_behavior": "adapter scope별 unique/dedup·금액/통화 검증, 중복/누락 회계 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA13",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "시작 시 DB와 JSON write 불가·읽기 metadata 불명·열린 포지션 존재",
+      "expected_behavior": "DEGRADED 제어/알림 유지 가능한 범위 공개, 임의 전략/새 위험 없음·관리 가능 여부 검증",
+      "tier": "critical"
+    },
+    {
+      "id": "CA14",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "종료 preview 뒤 fill/외부 개입·정리 중 취소·시장 폐장",
+      "expected_behavior": "최신 revision/scope 재확인, 이미 체결된 청산 rollback 주장 없음·미완료 종료 오표시 없음",
+      "tier": "critical"
+    },
+    {
+      "id": "CA15",
+      "status": "planned_not_implemented_not_run",
+      "priority": "critical",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "오래된 DB/control backup restore·철회 전 device token·core 새 epoch",
+      "expected_behavior": "device 재승인/control epoch 확인, 옛 권한으로 resume 안 됨·거래 수동 latch 유지",
+      "tier": "critical"
+    },
+    {
+      "id": "CA16",
+      "status": "planned_not_implemented_not_run",
+      "priority": "additional",
+      "source_spec": "docs/design/consistency-audit.md",
+      "scenario": "MC 없는 NN/CPU 경로·viewer 제외/포함 release·조건부 선행",
+      "expected_behavior": "필요한 capability만 gate, W graph 비순환·미지원/미실행 skip을 통과로 표시 안 함",
+      "tier": "required_per_capability"
+    }
+  ],
+  "critical_case_count": 66,
+  "additional_case_count": 64
+}

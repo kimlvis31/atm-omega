@@ -1,0 +1,39 @@
+# Omega master.config design example (2026-10-24).
+# Not read by the existing ATM app. New read-only Omega loader supports this example.
+# GUI and safety policies are user requirements; timeout values are drafts.
+schema_version = 1
+instance_id = "omega-main"
+
+[gui]
+autostart = false
+single_instance = true
+
+[runtime]
+start_method = "spawn"
+ready_timeout_s = 30
+shutdown_timeout_s = 30
+health_interval_s = 5
+
+[resources]
+profile = "auto"
+lazy_batch_workers = true
+lazy_gpu_workers = true
+
+[safety]
+on_live_anomaly = "block_new_risk_keep_protection_and_recovery"
+after_core_restart = "reconcile_then_manual_resume"
+after_storage_recovery = "reconcile_then_manual_resume"
+after_model_recovery = "restore_validate_then_manual_resume"
+after_execution_recovery = "reconcile_then_manual_resume"
+on_all_recording_failure = "block_new_risk_manage_existing_emit_critical"
+
+[paths]
+# Relative to the Omega root, not the launcher's current working directory.
+data_dir = "./data"
+artifact_dir = "./artifacts"
+runtime_settings_store = "./state/settings.json"
+bootstrap_log_dir = "./logs/bootstrap"
+
+# Service topology, explicit CLI overrides, credentials references, and
+# remote-control connection details will be specified in later designs.
+# Starting a trading runtime must not implicitly activate/resume strategies.
