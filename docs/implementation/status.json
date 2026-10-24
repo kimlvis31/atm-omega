@@ -32,8 +32,8 @@
     "pip_check": "passed",
     "sdist_and_wheel_build": "passed",
     "clean_environment_offline_wheel_install_and_import": "passed",
-    "github_workflow_remote_run": "pending_first_push",
-    "linux_execution": "pending_remote_ci",
+    "github_workflow_remote_run": "initial Windows/Linux run failed during tests; .tools parent missing; fix verified locally in fresh tracked-only checkout; awaiting SSH push",
+    "linux_execution": "remote run: dependency install/lint passed; 114 tests passed, 20 setup errors from missing temp parent; full run pending fix",
     "production_db": "not_run",
     "exchange_public_or_private_api_calls": "not_run",
     "gui_or_gpu_or_nn": "not_run",
@@ -302,7 +302,16 @@
     "visibility": "private",
     "origin_connected": true,
     "origin": "git@github.com:kimlvis31/atm-omega.git",
-    "first_commit_push": "awaiting_user_SSH_authentication",
-    "legacy_folders_published": false
+    "first_commit_push": "confirmed",
+    "legacy_folders_published": false,
+    "first_commit": "b420c52afe3b391d7a0ec22f36cce598e8c2ef24"
+  },
+  "ci_first_run": {
+    "url": "https://github.com/kimlvis31/atm-omega/actions/runs/40085670908",
+    "conclusion": "failure",
+    "cause": "missing .tools parent for explicit pytest basetemp",
+    "fix": "create directory before tests",
+    "fresh_tracked_only_windows_tests_passed": 134,
+    "fix_remote_verification": "pending user SSH push"
   }
 }

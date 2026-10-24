@@ -43,6 +43,8 @@ jobs:
           python-version-file: .python-version
       - name: Create isolated environment
         run: python -m venv .venv
+      - name: Prepare test and build directories
+        run: python -I -c "from pathlib import Path; Path('.tools').mkdir(exist_ok=True)"
       - name: Install hashed development dependencies
         run: '"$VENV_PYTHON" -I -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r "${{ matrix.lock }}"'
       - name: Dependency consistency

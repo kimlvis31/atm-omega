@@ -78,8 +78,9 @@
     "samsung_personal_order_api": "not verified from official public sources",
     "authenticated_api_calls": false,
     "github_workflows_created": true,
-    "github_workflows_executed": false,
-    "samsung_research": "official specialized-order notice and historical Koscom partnership reviewed; current personal API still unverified; deferred from implementation"
+    "github_workflows_executed": true,
+    "samsung_research": "official specialized-order notice and historical Koscom partnership reviewed; current personal API still unverified; deferred from implementation",
+    "github_workflow_status": "initial run failed; tested fix pending push; see implementation status"
   },
   "capacity_targets": {
     "max_connected_accounts": 10,
