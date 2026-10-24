@@ -1,2 +1,2 @@
 # Optional public market streaming dependency. Domain and REST remain stdlib-only.
-websockets==17.2
+websockets==17.3
