@@ -1,6 +1,6 @@
 # Preparation tools only. Omega runtime dependencies are not installed by this file.
 -r runtime.in
-pip==26.2.2
+pip==26.3
 pytest==9.1.1
 hypothesis==6.170.9
 ruff==0.17.2
