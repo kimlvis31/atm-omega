@@ -11,18 +11,35 @@ dependencies = []
 
 [project.optional-dependencies]
 streaming = ["websockets==17.2"]
+postgres = ["psycopg[binary]==3.3.6"]
+gui = ["PySide6_Essentials==6.12.0", "PySide6_Addons==6.12.0"]
+analysis = ["numpy==2.5.2", "scipy==1.18.1"]
+push = ["pywebpush==2.5.0"]
 
 [project.scripts]
 omega-collect = "omega.runtime.collect_cli:main"
+omega-collect-aux = "omega.runtime.auxiliary_collect_cli:main"
+omega-backfill = "omega.runtime.backfill_cli:main"
+omega-db = "omega.runtime.database_cli:main"
+omega-gui = "omega.gui.app:main"
+omega-core = "omega.runtime.app:main"
+omega-check-ts = "omega.runtime.ts_cli:main"
+omega-export = "omega.runtime.export_cli:main"
+omega-console = "omega.runtime.console:main"
+omega-margin-scenario = "omega.runtime.margin_console:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["omega*"]
 
+[tool.setuptools.package-data]
+omega = ["infrastructure/postgres/*.sql", "strategies/*/manifest.json", "mobile/web/*", "gui/assets/eta/*.png"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+markers = ["database: opt-in tests against an isolated local PostgreSQL/TimescaleDB container"]
 
 [tool.ruff]
 target-version = "py313"

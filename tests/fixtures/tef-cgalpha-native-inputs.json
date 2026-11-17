@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "scope": "Completed CGALPHA typed graph inputs; numeric warmup remains required",
+  "strategy_configuration": {
+    "model": "CGALPHA"
+  },
+  "analysis": {
+    "moving_averages": [
+      {
+        "interval_id": 7,
+        "ema_period": null,
+        "mmacd_periods": [
+          12,
+          26
+        ],
+        "signal_period": 9,
+        "price_precision": 8
+      }
+    ],
+    "momentum": [
+      {
+        "interval_id": 5,
+        "analysis_code": "MFI",
+        "nSamples": 14,
+        "line_index": 0
+      },
+      {
+        "interval_id": 7,
+        "analysis_code": "DMIxADX",
+        "nSamples": 14,
+        "line_index": 0
+      }
+    ],
+    "parabolic": [
+      {
+        "interval_id": 5,
+        "line_index": 0,
+        "start": 0.02,
+        "acceleration": 0.005,
+        "maximum": 0.2,
+        "price_precision": 8
+      }
+    ],
+    "order_flow": [
+      {
+        "interval_id": 0,
+        "analysis_code": "NES",
+        "nSamples": 14,
+        "line_index": 0,
+        "quote_precision": 8
+      },
+      {
+        "interval_id": 0,
+        "analysis_code": "WOI",
+        "nSamples": 14,
+        "line_index": 0,
+        "quote_precision": 8
+      }
+    ]
+  },
+  "required_fields": [
+    "0_NES_0_NESABSMAREL",
+    "0_WOI_0_WOIABSMAREL",
+    "5_MFI_0_MFIDEVABSMAREL",
+    "5_PSAR_0_DCC",
+    "5_PSAR_0_PSAR",
+    "7_DMIxADX_0_DMIxADXABSMAREL",
+    "7_MMACD_MSDELTAABSMAREL",
+    "CLOSED_7"
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "BOL": {
+    "constant_sha256": {},
+    "path": "AutoTradeMachine_Eta/AutoTradeMachine_Eta/analysis/bollinger_band.py",
+    "segment_sha256": {
+      "generate": "a31a50eba7d26d66eb4b4f90587c41cbd419af1ec507d51ffe27cc26008e13c6",
+      "linearize": "be39d59bcab4b5b6330b77344efdfb30f688847137ecfb86ecba86c46a44c99a"
+    },
+    "source_sha256": "f95a232010a0e9d9bf4f9ba4bada758308289175baa788443114e868b0dbc119"
+  },
+  "SMA": {
+    "constant_sha256": {},
+    "path": "AutoTradeMachine_Eta/AutoTradeMachine_Eta/analysis/moving_average_simple.py",
+    "segment_sha256": {
+      "generate": "719d72986f974cd620a4cf6db8f03abae6bf200ac6fd35ac60547927d600f6bc",
+      "linearize": "e5f6917c835a0638ab33b6596ed0bac32d99d6b5dd0451b3b6107ec8e158c707"
+    },
+    "source_sha256": "4c2c0bf2d0e840dab3c58dfe8c1f6e81dad0b2a1fa8a8f260825c570308cfa76"
+  },
+  "WMA": {
+    "constant_sha256": {},
+    "path": "AutoTradeMachine_Eta/AutoTradeMachine_Eta/analysis/moving_average_weighted.py",
+    "segment_sha256": {
+      "generate": "0a25be060d7792efee512cecda54c1132b76c3a3176d64932ceb540f93e32417",
+      "linearize": "b3140a06487a2cb9062bf2bf0c82c97bebe94a736b2ce641ff48076e03dc9fc7"
+    },
+    "source_sha256": "c83bdb806d1a484543ddfe7e9342d5e6773a602395cf5b28b18f9e43d648968b"
+  },
+  "constants": {
+    "constant_sha256": {
+      "KLINDEX_CLOSED": "6348166a77800e215868365d95ddcb6aeedd4589d0fae1d61a4c30b6eae890ba",
+      "KLINDEX_CLOSEPRICE": "b6a0e6196d4d829c79c7f132a87e6541b2ef1359372c3fc93d21589f75475a13",
+      "KLINDEX_CLOSETIME": "0e17eb6203ee2035eac579ddcac58be87ba54e6bea95320b5dd202bfc6861738",
+      "KLINDEX_HIGHPRICE": "1f5068aa1b392720a063ddb73cefafe2d23ed0213482b2020c6299da5370b63c",
+      "KLINDEX_LOWPRICE": "7465c636739f83b55476e349fc26d44bc7374db2dcdbba9ccb6d711d0d121b56",
+      "KLINDEX_NTRADES": "89a91f631e470ece5e9db6aa72d1e203d3216d7538201276713790715c383ce7",
+      "KLINDEX_OPENPRICE": "bc6e6f8fc8e70bf6650156fb1e56d657515742623eb337553b80b09cd2136c41",
+      "KLINDEX_OPENTIME": "8899e0b507c526a48ca9afc285190c1276a582cec345cac2842c724f8a9c4460",
+      "KLINDEX_SOURCE": "562dde95655699350659aed35efb735cee508e176880a0b90838a5a189b8971a",
+      "KLINDEX_VOLBASE": "0b77c8d89cabd9de23da992955a330c389b5a2f85f9ccb455eb3319b6857c1b4",
+      "KLINDEX_VOLBASETAKERBUY": "510e5d3ca1ae2d6034a0269ebef00106540e7c8b349cd28db46f288eb4aad2f7",
+      "KLINDEX_VOLQUOTE": "cbf1e323786c65567a81ef23ac1dd5f276c240132c0e1bf3065aca9f9f2fa673",
+      "KLINDEX_VOLQUOTETAKERBUY": "46b1268a1cb69e9fd6c4e862ce3af51accb8d5ed28999a5058c4ad513cb0dfbd",
+      "KLINE_INTERVAL_ID_12h": "abe97029f76f517987335d3f211f7cc3aaae69f4dacd63ccaab08825630f733a",
+      "KLINE_INTERVAL_ID_15m": "30d5808c947d9316b1d505a9299d116b21dcadb6b459894b57bd55aa0265bfe7",
+      "KLINE_INTERVAL_ID_1M": "dce2d85089ae74b683ef46fbf028c832dc76da5c4c7e2b884cb2d7abc7acfca7",
+      "KLINE_INTERVAL_ID_1W": "0720f3cebfdd28b4ab53c79d7e9caf580885c9e41ec123d82b088259afe31952",
+      "KLINE_INTERVAL_ID_1d": "13a064832249adffcba4883f64066102c33b84d53481c2dee7829a5b374b5597",
+      "KLINE_INTERVAL_ID_1h": "42c97286efac58b687b6e69d321eb4183f0e34af71755f8741356a340f213107",
+      "KLINE_INTERVAL_ID_1m": "97390991c1720d30090fedf0ef88d34a29803803e2410bd80404aedcf0b9dae9",
+      "KLINE_INTERVAL_ID_2h": "c9b72f1f5213aa65da7a595e154bc2b2cba42abeeca525f2176381a4020803c1",
+      "KLINE_INTERVAL_ID_30m": "3651e58b89c2593f26e740801cb8e61633972692b97a6378e23220b1520928da",
+      "KLINE_INTERVAL_ID_3d": "98c43bfab2890d1944471790e762127ebd8f14bfb8bb75eb7d613086f0e29dc7",
+      "KLINE_INTERVAL_ID_3m": "5cbd9493f014c24542f290f3c6a30e2045defbc811d7d496eee3284400ab4e04",
+      "KLINE_INTERVAL_ID_4h": "e5a9dab6546f3da23fb3d89a9a82fc5d121b4582b5e264a3b3ef8689cda55cba",
+      "KLINE_INTERVAL_ID_5m": "3fc3b9fb97199280c58acfdb72139bc51ac6d02faf6be1d7fa9534b62e2b8266",
+      "KLINE_INTERVAL_ID_6h": "925caff2d46d49efa5971a116b263196f5c99c2d9ab4a0f15c953102cc99ad5b",
+      "KLINE_INTERVAL_ID_8h": "692cdc729aac7d9a3eac6210a341ba7153cd9a581a7676ea71f0fb5e8099fabf",
+      "KLINE_INTERVAL_SECs": "88437ec3a5146068c336f4e00ca1e094e71066eec1727e2669474aedbc6a3034"
+    },
+    "path": "AutoTradeMachine_Eta/AutoTradeMachine_Eta/constants.py",
+    "segment_sha256": {},
+    "source_sha256": "91e25818d80e37d741e2b7c7e08180cd31a8a55fa21596f67709e9148e83f507"
+  },
+  "helpers": {
+    "constant_sha256": {},
+    "path": "AutoTradeMachine_Eta/AutoTradeMachine_Eta/auxiliaries.py",
+    "segment_sha256": {
+      "getNextIntervalTickTimestamp": "2ada11ef50ae62f920c94fd382c3ed50a4f4d518046675238d545e7ab65cfff7",
+      "getTimestampList_byNTicks": "e9fc9eef3f91aa41396c1a68a4f03b8270bf406f590871418c9ec9498f1575cb"
+    },
+    "source_sha256": "22fead19ecd10a2dfa9a3c6bb492b209e23bf571185b19961dc4e806273f9a4e"
+  }
+}

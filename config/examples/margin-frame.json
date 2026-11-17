@@ -1,0 +1,54 @@
+{
+  "candles": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "open_time_ms": 60000,
+      "open": "100",
+      "high": "120",
+      "low": "80",
+      "close": "110",
+      "volume": "10"
+    },
+    {
+      "instrument": "binance:usdm:ETHUSDT",
+      "open_time_ms": 60000,
+      "open": "100",
+      "high": "120",
+      "low": "80",
+      "close": "110",
+      "volume": "10"
+    }
+  ],
+  "as_of_ms": 120000,
+  "phase": "open",
+  "brackets": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "observed_at_ms": 0,
+      "available_at_ms": 0,
+      "rows": [
+        {
+          "notional_floor": "0",
+          "notional_cap": "1000000",
+          "maintenance_rate": "0.01",
+          "maintenance_amount": "0",
+          "max_leverage": 20
+        }
+      ]
+    },
+    {
+      "instrument": "binance:usdm:ETHUSDT",
+      "observed_at_ms": 0,
+      "available_at_ms": 0,
+      "rows": [
+        {
+          "notional_floor": "0",
+          "notional_cap": "1000000",
+          "maintenance_rate": "0.01",
+          "maintenance_amount": "0",
+          "max_leverage": 20
+        }
+      ]
+    }
+  ]
+}

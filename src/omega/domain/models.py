@@ -1,6 +1,7 @@
 """Provider-neutral identities and exact values. Floats are not money inputs."""
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -53,6 +54,21 @@ class OrderStatus(StrEnum):
     PENDING_CANCEL = "PENDING_CANCEL"
 
 
+def is_valid_symbol(value) -> bool:
+    """Stable case-sensitive market ID, never normalized into a different identity."""
+    return (
+        type(value) is str
+        and 2 <= len(value) <= 40
+        and value.upper() == value
+        and unicodedata.normalize("NFKC", value) == value
+        and all(
+            character in "_-"
+            or (character.isalnum() and unicodedata.bidirectional(character) in {"L", "EN"})
+            for character in value
+        )
+    )
+
+
 @dataclass(frozen=True)
 class Instrument:
     provider: str
@@ -63,7 +79,7 @@ class Instrument:
         if (
             not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", self.provider)
             or not isinstance(self.market, Market)
-            or not re.fullmatch(r"[A-Z0-9_-]{2,40}", self.symbol)
+            or not is_valid_symbol(self.symbol)
         ):
             raise ValidationError("invalid instrument identity")
 
@@ -83,6 +99,8 @@ class OrderRequest:
     reduce_only: bool = False
 
     def __post_init__(self):
+        if type(self.reduce_only) is not bool:
+            raise ValidationError("reduce-only control must be a native boolean")
         require_decimal(self.quantity)
         if self.price is not None:
             require_decimal(self.price)
@@ -131,6 +149,9 @@ class Fill:
     fee: Decimal
     fee_asset: str
     timestamp_ms: int
+    quote_quantity: Decimal | None = None
+    realized_pnl: Decimal | None = None
+    realized_pnl_asset: str | None = None
 
     def __post_init__(self):
         for value in (self.quantity, self.price, self.fee):
@@ -144,6 +165,27 @@ class Fill:
         decimal(self.fee)  # Negative commission rebates are possible.
         if self.timestamp_ms < 0 or (self.fee and not self.fee_asset):
             raise ValidationError("invalid fill metadata")
+        for value in (self.quote_quantity, self.realized_pnl):
+            if value is not None:
+                if type(value) is not Decimal:
+                    raise ValidationError("reported fill amounts require native Decimals")
+                require_decimal(value)
+                parts = value.as_tuple()
+                if len(parts.digits) > 80 or not -60 <= parts.exponent <= 60:
+                    raise ValidationError(
+                        "reported fill amount exceeds its exact calculation bound"
+                    )
+        if self.quote_quantity is not None and self.quote_quantity <= 0:
+            raise ValidationError("reported fill quote quantity must be positive")
+        if (self.realized_pnl is None) != (self.realized_pnl_asset is None):
+            raise ValidationError("reported fill PnL requires its paired settlement asset")
+        if self.realized_pnl_asset is not None and (
+            type(self.realized_pnl_asset) is not str
+            or not 1 <= len(self.realized_pnl_asset) <= 40
+            or not self.realized_pnl_asset.isprintable()
+            or any(char.isspace() for char in self.realized_pnl_asset)
+        ):
+            raise ValidationError("reported fill PnL asset must be bounded native text")
 
     @property
     def key(self) -> tuple[str, str, str]:

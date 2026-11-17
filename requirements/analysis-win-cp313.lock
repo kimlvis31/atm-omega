@@ -1,0 +1,6 @@
+# Optional IVP arithmetic. CPython 3.13 / win x86-64.
+# Official package index: https://pypi.org/simple
+numpy==2.5.2 \
+    --hash=sha256:85aaccb24182c25df891ad0ec333585967e115269d5f1b17f2c9ae005bc96657
+scipy==1.18.1 \
+    --hash=sha256:559ed65f60c1af5a03f3912605a1b5114f522c7c32fb23c3376ae8f03219fe28

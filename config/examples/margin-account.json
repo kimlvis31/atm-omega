@@ -1,0 +1,21 @@
+{
+  "account_id": "margin-demo",
+  "balance": "1000",
+  "positions": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "owner_id": "btc-demo",
+      "margin_mode": "cross",
+      "leverage": 10,
+      "budget_margin": "100"
+    },
+    {
+      "instrument": "binance:usdm:ETHUSDT",
+      "owner_id": "eth-demo",
+      "margin_mode": "isolated",
+      "leverage": 5,
+      "budget_margin": "100",
+      "isolated_collateral": "100"
+    }
+  ]
+}

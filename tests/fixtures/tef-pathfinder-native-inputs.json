@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "scope": "Complete built-in PATHFINDER configured graph; first-frame warmup only, no full trading/parity claim",
+  "strategy_configuration": {
+    "model": "PATHFINDER"
+  },
+  "analysis": {
+    "market_sentiment": [
+      {
+        "interval_id": 5,
+        "nSamples": 14,
+        "line_index": 0,
+        "quote_precision": 8,
+        "maximum_metric_age_ms": 330000
+      }
+    ],
+    "short_term_scalar": [
+      {
+        "interval_id": 0,
+        "MMACDFast": 10,
+        "MMACDSlow": 20,
+        "MMACDSignal": 9,
+        "DMIxADXNSamples": 20,
+        "MFINSamples": 20,
+        "WOINSamples": 5,
+        "WOIBaseNSamples": 240,
+        "OSCScale": 1.0,
+        "WMMACD": 1.0,
+        "WMFI": 1.0,
+        "WDMIxADX": 0.5,
+        "WWOI": 0.5,
+        "price_precision": 8,
+        "quote_precision": 8
+      }
+    ]
+  },
+  "required_fields": [
+    "CLOSED_5",
+    "CLOSED_0",
+    "5_MST_0_MST",
+    "0_STS_S"
+  ]
+}

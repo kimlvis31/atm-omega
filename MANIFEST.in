@@ -1,8 +1,25 @@
 include README.md README.ko.md .python-version
-recursive-include tests *.py *.json
-recursive-include config *.toml
+recursive-include assets *.png
+recursive-include src/omega/gui/assets *.png
+recursive-include tests *.py *.json *.cjs
+recursive-include config *.toml *.json
+include config/README.md
 include requirements/README.md
 include requirements/dev.in requirements/requirements.in requirements/runtime.in
 include requirements/dev-win-cp313.lock requirements/dev-linux-cp313.lock
+include setup.bat setup.sh requirements/install-cp313.lock
+include scripts/setup_environment.py
+include run.bat run.sh scripts/run_omega.py
+include console.bat console.sh logs.bat logs.sh
+include gui.bat gui.sh core.bat core.sh check_ts.bat check_ts.sh scripts/check_ts.py
+include requirements/gui-cp313.lock
+include requirements/analysis-win-cp313.lock requirements/analysis-linux-cp313.lock
+include requirements/neural-cpu-win-cp313.lock requirements/neural-cpu-linux-cp313.lock
+include requirements/neural-cuda-win-cp313.lock
+include compose.yaml
+recursive-include deploy *.sh
+recursive-include src/omega/infrastructure/postgres *.sql
+recursive-include src/omega/strategies manifest.json
+recursive-include src/omega/mobile/web *.html *.js *.css
 prune docs
 exclude AGENTS.md

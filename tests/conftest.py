@@ -6,6 +6,19 @@ from contextvars import ContextVar
 import pytest
 
 
+def pytest_addoption(parser):
+    parser.addoption("--database-tests", action="store_true", help="enable isolated local DB tests")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--database-tests"):
+        for item in items:
+            if "database" in item.keywords:
+                item.add_marker(
+                    pytest.mark.skip(reason="requires --database-tests and isolated DB")
+                )
+
+
 @pytest.fixture(autouse=True)
 def deny_network(monkeypatch):
     original = socket.socket.connect

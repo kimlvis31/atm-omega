@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 from collections.abc import Callable, Mapping
@@ -20,9 +21,28 @@ from omega.domain.errors import (
     ValidationError,
 )
 from omega.infrastructure.binance.budget import RequestBudget
-from omega.infrastructure.binance.transport import HttpRequest, HttpTransport
+from omega.infrastructure.binance.transport import HttpRequest, HttpResponse, HttpTransport
 
 ALLOWED_HOSTS = frozenset({"api.binance.com", "fapi.binance.com"})
+
+
+@dataclass(frozen=True)
+class DecodedResponse:
+    data: object = field(repr=False)
+    response: HttpResponse = field(repr=False)
+
+
+def _unique_response_object(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate provider response field")
+        result[key] = value
+    return result
+
+
+def _invalid_response_constant(_value):
+    raise ValueError("nonfinite provider JSON constant")
 
 
 @dataclass(frozen=True)
@@ -74,6 +94,20 @@ class BinanceClient:
         self.recv_window_ms = recv_window_ms
 
     def request(
+        self,
+        method: str,
+        path: str,
+        params: Mapping[str, object] | None = None,
+        *,
+        signed: bool = False,
+        weight: int = 1,
+        order: bool = False,
+    ):
+        return self.request_with_response(
+            method, path, params, signed=signed, weight=weight, order=order
+        ).data
+
+    def request_with_response(
         self,
         method: str,
         path: str,
@@ -136,9 +170,33 @@ class BinanceClient:
                         self.budget.observe_usage(scope, seconds, int(value))
                     except (TypeError, ValueError):
                         pass  # Malformed headers never reset an existing reservation.
+        # Gateways may return an HTML/empty rate-limit response. Respect the
+        # status and shared cooldown before attempting the optional JSON body.
+        if response.status in {418, 429}:
+            retry = next(
+                (v for k, v in response.headers.items() if k.lower() == "retry-after"), None
+            )
+            try:
+                delay = float(retry) if retry is not None else 60.0
+                if not math.isfinite(delay) or delay < 0:
+                    delay = 60.0
+            except (TypeError, ValueError, OverflowError):
+                delay = 60.0
+            if self.budget:
+                self.budget.cooldown(delay)
+            raise RateLimited(delay)
+        if not mutation and response.status >= 500:
+            # Read-only requests can be retried by their collection owner. A
+            # gateway HTML error is transport failure, not a schema rejection.
+            raise TransportError("provider temporarily unavailable")
         try:
-            payload = json.loads(response.body, parse_float=Decimal)
-        except (ValueError, UnicodeError):
+            payload = json.loads(
+                response.body,
+                parse_float=Decimal,
+                parse_constant=_invalid_response_constant,
+                object_pairs_hook=_unique_response_object,
+            )
+        except (ValueError, UnicodeError, RecursionError):
             if mutation:
                 raise OrderOutcomeUnknown("unreadable mutation response; reconcile") from None
             raise ProtocolError("unreadable provider response") from None
@@ -147,20 +205,9 @@ class BinanceClient:
             response.status >= 500 or (isinstance(code, int) and code in {-1006, -1007})
         ):
             raise OrderOutcomeUnknown("broker mutation outcome unknown; reconcile")
-        if response.status in {418, 429}:
-            retry = next(
-                (v for k, v in response.headers.items() if k.lower() == "retry-after"), None
-            )
-            try:
-                delay = max(0.0, float(retry)) if retry is not None else None
-            except (TypeError, ValueError):
-                delay = None
-            if self.budget:
-                self.budget.cooldown(delay if delay is not None else 60)
-            raise RateLimited(delay)
         if not 200 <= response.status < 300 or (isinstance(code, int) and code < 0):
             raise BrokerRejected(code if isinstance(code, int) else 0, response.status)
-        return payload
+        return DecodedResponse(payload, response)
 
     @staticmethod
     def _wire(value: object) -> str:

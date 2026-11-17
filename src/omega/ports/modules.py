@@ -1,10 +1,9 @@
 """Future analysis, strategy and external NN integrations cannot access a broker port."""
 
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, Protocol
 
-from omega.domain.models import Candle, Instrument
+from omega.domain.models import Candle
 
 
 @dataclass(frozen=True)
@@ -19,21 +18,6 @@ class Feature(Protocol):
     descriptor: ModuleDescriptor
 
     def update(self, candle: Candle) -> dict[str, Any]: ...
-
-
-@dataclass(frozen=True)
-class StrategySignal:
-    instrument: Instrument
-    target_exposure: Decimal
-    available_at_ms: int
-
-
-class Strategy(Protocol):
-    descriptor: ModuleDescriptor
-
-    def evaluate(
-        self, closed_candle: Candle, features: dict[str, Any]
-    ) -> StrategySignal | None: ...
 
 
 class ExternalModel(Protocol):

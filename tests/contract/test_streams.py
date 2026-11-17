@@ -109,3 +109,17 @@ def test_subscription_boundaries():
     ]:
         with pytest.raises(ValidationError):
             StreamPlan(Market.SPOT, instruments)
+
+
+def test_future_tolerance_is_explicit_bounded_and_does_not_change_strict_default():
+    plan = StreamPlan(Market.SPOT, (Instrument("binance", Market.SPOT, "BTCUSDT"),))
+    with pytest.raises(ProtocolError):
+        plan.decode(payload(), received_at_ms=59_600)
+    observation = plan.decode(payload(), received_at_ms=59_600, future_tolerance_ms=400)
+    assert observation.candle.close_time_ms == 60_000
+    assert observation.received_at_ms == 59_600  # Parsing itself never invents a receipt.
+    with pytest.raises(ProtocolError):
+        plan.decode(payload(), received_at_ms=57_999, future_tolerance_ms=2000)
+    for invalid in (True, -1, 2001, 0.5):
+        with pytest.raises(ValidationError):
+            plan.decode(payload(), received_at_ms=60_000, future_tolerance_ms=invalid)

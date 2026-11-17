@@ -6,7 +6,16 @@ from pathlib import Path
 
 def test_dependency_direction_and_no_legacy_gui_framework_imports():
     forbidden = {
-        "domain": {"omega.application", "omega.infrastructure", "omega.runtime", "omega.ports"},
+        "domain": {
+            "omega.application",
+            "omega.infrastructure",
+            "omega.runtime",
+            "omega.ports",
+            "omega.research",
+            "omega.gui",
+            "omega.strategies",
+            "omega.analysis",
+        },
         "ports": {"omega.application", "omega.infrastructure", "omega.runtime"},
         "application": {"omega.infrastructure", "omega.runtime"},
         "analysis": {
@@ -37,7 +46,14 @@ def test_dependency_direction_and_no_legacy_gui_framework_imports():
                 assert not any(
                     name == f or name.startswith(f + ".") for f in forbidden.get(layer, set())
                 ), (path, name)
-                assert not name.startswith(("pyglet", "PySide6", "torch", "AutoTradeMachine")), (
+                forbidden_frameworks = ("pyglet", "AutoTradeMachine")
+                # Only the explicitly optional external-NN example may import
+                # its framework. Core/analysis/TS remain framework independent.
+                if path.as_posix() != "src/omega/research/pytorch_instance.py":
+                    forbidden_frameworks += ("torch",)
+                if layer != "gui":
+                    forbidden_frameworks += ("PySide6",)
+                assert not name.startswith(forbidden_frameworks), (
                     path,
                     name,
                 )

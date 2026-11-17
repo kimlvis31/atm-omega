@@ -5,8 +5,16 @@ class OmegaError(Exception):
     pass
 
 
+class AuthorizationDenied(PermissionError):
+    """An explicit access-policy denial, distinct from filesystem permission failure."""
+
+
 class ValidationError(OmegaError):
     pass
+
+
+class CommandRejected(ValidationError):
+    """A provider guarantees that validation rejected the command before mutation."""
 
 
 class UnsupportedCapability(OmegaError):
@@ -44,3 +52,7 @@ class RateLimited(OmegaError):
 
 class JournalError(OmegaError):
     pass
+
+
+class StorageError(OmegaError):
+    """Persistence failure without DSNs, server messages, or credential contents."""

@@ -1,0 +1,8 @@
+# Copy to database.config.toml at the project root, or run omega-db configure.
+# Paths are relative to this configuration file. Passwords are never stored here.
+host = "127.0.0.1"
+port = 55432
+dbname = "omega"
+user = "omega_app"
+password_file = "secrets/db_app_password"
+connect_timeout_s = 5

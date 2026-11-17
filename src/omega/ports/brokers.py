@@ -1,5 +1,6 @@
 from typing import Protocol
 
+from omega.domain.execution_inventory import ConditionalOrderInventory, OpenOrderInventory
 from omega.domain.models import (
     AccountSnapshot,
     Candle,
@@ -18,6 +19,14 @@ class MarketData(Protocol):
 
 class AccountReader(Protocol):
     def account(self) -> AccountSnapshot: ...
+
+
+class OpenOrderReader(Protocol):
+    def open_orders(self) -> OpenOrderInventory: ...
+
+
+class ConditionalOrderReader(Protocol):
+    def open_conditional_orders(self) -> ConditionalOrderInventory: ...
 
 
 class Execution(Protocol):

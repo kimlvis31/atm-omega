@@ -7,7 +7,7 @@ import pytest
 
 from omega.domain.errors import ValidationError
 from omega.domain.models import Candle, Instrument, Market, decimal
-from omega.strategies.tef.strategy import MODELS, TefStrategy
+from omega.strategies.tef.strategy import MODELS, TefModel
 
 INSTRUMENT = Instrument("binance", Market.USDM, "BTCUSDT")
 REFERENCE = json.loads(Path("tests/fixtures/tef-legacy.json").read_text())
@@ -22,7 +22,7 @@ def candle(index=0, close="100"):
 
 @pytest.mark.parametrize("reference", REFERENCE, ids=lambda r: r["model"])
 def test_240_step_legacy_reference_per_completed_model(reference):
-    strategy = TefStrategy(reference["model"], INSTRUMENT)
+    strategy = TefModel(reference["model"], INSTRUMENT)
     for index, step in enumerate(reference["steps"]):
         signal = strategy.evaluate(
             candle(index, str(step["features"]["KLINE_CLOSEPRICE"])), step["features"]
@@ -33,7 +33,7 @@ def test_240_step_legacy_reference_per_completed_model(reference):
 
 
 def test_pathfinder_quantized_entry_neutral_hold_profit_take_and_swap():
-    strategy = TefStrategy("PATHFINDER", INSTRUMENT, {"Swap_Ratio_S": 0.5})
+    strategy = TefModel("PATHFINDER", INSTRUMENT, {"Swap_Ratio_S": 0.5})
 
     def run(index, mst, sts, price="100"):
         return strategy.evaluate(
@@ -55,7 +55,7 @@ def test_pathfinder_quantized_entry_neutral_hold_profit_take_and_swap():
 
 
 def test_bscalpha_direction_separate_from_held_raw_exposure():
-    strategy = TefStrategy("BSCALPHA", INSTRUMENT)
+    strategy = TefModel("BSCALPHA", INSTRUMENT)
     features = {
         "CLOSED_11": True,
         "CLOSED_5": True,
@@ -75,10 +75,15 @@ def test_bscalpha_direction_separate_from_held_raw_exposure():
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_missing_features_do_not_emit_liquidation_or_advance_model_state(model):
-    strategy = TefStrategy(model, INSTRUMENT)
+def test_missing_features_do_not_emit_liquidation_or_invent_model_inputs(model):
+    strategy = TefModel(model, INSTRUMENT)
     assert strategy.evaluate(candle(), {}) is None
-    assert strategy.state == {}
+    if model == "PATHFINDER":
+        # The original initializes its independent caches before checking missing inputs.
+        assert strategy.state["MST_last"] is None and strategy.state["STS_last"] is None
+        assert strategy.state["tefVal_prev"] == 0
+    else:
+        assert strategy.state == {}
 
 
 @pytest.mark.parametrize(
@@ -93,20 +98,20 @@ def test_missing_features_do_not_emit_liquidation_or_advance_model_state(model):
 )
 def test_bad_parameters_rejected(parameters):
     with pytest.raises(ValidationError):
-        TefStrategy("MMACDDEFAULT", INSTRUMENT, parameters)
+        TefModel("MMACDDEFAULT", INSTRUMENT, parameters)
 
 
 def test_unfinished_strategy_and_beta_zero_denominator_excluded():
     with pytest.raises(ValidationError):
-        TefStrategy("BSCDELTA", INSTRUMENT)
+        TefModel("BSCDELTA", INSTRUMENT)
     with pytest.raises(ValidationError, match="alpha must be positive"):
-        TefStrategy("BSCBETA", INSTRUMENT, {"MTF_Alpha_Entry_S": 0})
+        TefModel("BSCBETA", INSTRUMENT, {"MTF_Alpha_Entry_S": 0})
 
 
 def test_idempotency_conflict_gap_and_state_isolation():
     strategy, other = (
-        TefStrategy("MMACDDEFAULT", INSTRUMENT),
-        TefStrategy("MMACDDEFAULT", INSTRUMENT),
+        TefModel("MMACDDEFAULT", INSTRUMENT),
+        TefModel("MMACDDEFAULT", INSTRUMENT),
     )
     fields = {"0_MMACD_MSDELTAABSMAREL": 1.0}
     signal = strategy.evaluate(candle(), fields)
@@ -128,7 +133,7 @@ def test_idempotency_conflict_gap_and_state_isolation():
 
 def test_spd_zero_swing_price_rejected_before_division():
     with pytest.raises(ValidationError, match="price reference"):
-        TefStrategy("SPDDEFAULT", INSTRUMENT).evaluate(
+        TefModel("SPDDEFAULT", INSTRUMENT).evaluate(
             candle(),
             {
                 "0_SWING_0_LSTYPE": 1,

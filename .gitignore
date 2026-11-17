@@ -17,6 +17,7 @@ __pycache__/
 /state/
 /logs/
 /artifacts/
+/jobs/
 /secrets/
 .env
 .env.*
@@ -29,6 +30,7 @@ __pycache__/
 /TEFFPSeeker/
 /binance-futures-leverage-margin-table-generator/
 /master.config.toml
+/database.config.toml
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

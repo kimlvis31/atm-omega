@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <title>ATM Omega</title>
+  <rect width="192" height="192" rx="32" fill="#ededed"/>
+  <circle cx="96" cy="96" r="72" fill="#c3e34c"/>
+  <path d="M49 139v-16h21C48 102 51 68 71 54c15-11 35-11 50 0 20 14 23 48 1 69h21v16h-43v-18c27-16 26-45 12-55-9-7-23-7-32 0-14 10-15 39 12 55v18Z" fill="#30343a"/>
+</svg>

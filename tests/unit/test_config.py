@@ -38,3 +38,37 @@ def test_invalid_configuration_is_not_silently_coerced(tmp_path, content):
     path.write_text(content)
     with pytest.raises(ValidationError):
         load_master(tmp_path, path)
+
+
+def test_neural_evidence_defaults_partial_override_and_no_side_effect(tmp_path):
+    baseline = load_master(tmp_path)
+    assert baseline.neural_evidence.max_bytes == 536870912
+    path = tmp_path / "master.config.toml"
+    path.write_text("[neural_evidence]\nwarning_percent=70\nmax_pins=100\n")
+    changed = load_master(tmp_path)
+    assert changed.neural_evidence.warning_percent == 70
+    assert changed.neural_evidence.max_pins == 100
+    assert changed.neural_evidence.max_bytes == baseline.neural_evidence.max_bytes
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "max_bytes=true",
+        "max_bytes=4194303",
+        "max_bytes=8589934593",
+        "max_records=15",
+        "max_records=1000001",
+        "max_pins=0",
+        "max_pins=65537",
+        "warning_percent=100",
+        "warning_percent=1.0",
+        "warning_percent=0",
+        "retention_days=7",
+    ],
+)
+def test_invalid_evidence_budget_is_not_silently_coerced(tmp_path, setting):
+    (tmp_path / "master.config.toml").write_text("[neural_evidence]\n" + setting)
+    with pytest.raises(ValidationError):
+        load_master(tmp_path)

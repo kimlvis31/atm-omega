@@ -1,5 +1,6 @@
 """Bounded HTTPS transport without automatic retries or credential redirects."""
 
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -21,6 +22,8 @@ class HttpResponse:
     status: int
     body: bytes = field(repr=False)
     headers: dict[str, str] = field(default_factory=dict)
+    # Optional observation metadata does not change legacy status/body/header equality.
+    received_at_ms: int | None = field(default=None, compare=False)
 
 
 class HttpTransport(Protocol):
@@ -53,8 +56,11 @@ class UrllibTransport:
         try:
             with response:
                 body = response.read(self.max_bytes + 1)
+                received_at_ms = time.time_ns() // 1_000_000
                 if len(body) > self.max_bytes:
                     raise TransportError("provider response exceeded configured limit")
-                return HttpResponse(response.code, body, dict(response.headers.items()))
+                return HttpResponse(
+                    response.code, body, dict(response.headers.items()), received_at_ms
+                )
         except (TimeoutError, OSError):
             raise TransportError("HTTPS response failed; request details redacted") from None

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "scope": "original_flow_only_native_document",
+  "destination": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "cases": {
+    "observed": {
+      "destination": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "frames": [
+        {
+          "candle": {
+            "instrument": "binance:usdm:BTCUSDT",
+            "open_time_ms": 0,
+            "close_time_ms": 60000,
+            "values": [
+              "100",
+              "110",
+              "90",
+              "101",
+              "10"
+            ]
+          },
+          "as_of_ms": 60000,
+          "inputs": [
+            "{\"instrument\":{\"market\":\"usdm\",\"provider\":\"binance\",\"symbol\":\"BTCUSDT\"},\"observation\":{\"available_at_ms\":60000,\"channel\":\"trade_flow\",\"coverage\":\"1\",\"event_time_ms\":60000,\"quality\":\"observed\",\"source\":\"binance:usdm:BTCUSDT:aggTrade\",\"values\":[{\"name\":\"AGGTRADE_NOTIONALBUY\",\"type\":\"decimal\",\"value\":\"1600\"},{\"name\":\"AGGTRADE_NOTIONALSELL\",\"type\":\"decimal\",\"value\":\"500\"}],\"window_end_ms\":60000,\"window_start_ms\":0},\"schema_version\":1}"
+          ],
+          "pins": [
+            {
+              "revision": 1,
+              "checksum": "831a0ecca31e530c705893d85ea01a5269f90407f0e68647d105f0ea63ed3348",
+              "previous_checksum": null,
+              "payload": "{\"instrument\":{\"market\":\"usdm\",\"provider\":\"binance\",\"symbol\":\"BTCUSDT\"},\"observation\":{\"available_at_ms\":60000,\"channel\":\"trade_flow\",\"coverage\":\"1\",\"event_time_ms\":60000,\"quality\":\"observed\",\"source\":\"binance:usdm:BTCUSDT:aggTrade\",\"values\":[{\"name\":\"AGGTRADE_NOTIONALBUY\",\"type\":\"decimal\",\"value\":\"1600\"},{\"name\":\"AGGTRADE_NOTIONALSELL\",\"type\":\"decimal\",\"value\":\"500\"}],\"window_end_ms\":60000,\"window_start_ms\":0},\"schema_version\":1}"
+            }
+          ]
+        }
+      ]
+    },
+    "missing": {
+      "destination": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "frames": [
+        {
+          "candle": {
+            "instrument": "binance:usdm:BTCUSDT",
+            "open_time_ms": 0,
+            "close_time_ms": 60000,
+            "values": [
+              "100",
+              "110",
+              "90",
+              "101",
+              "10"
+            ]
+          },
+          "as_of_ms": 60000,
+          "inputs": [
+            "{\"instrument\":{\"market\":\"usdm\",\"provider\":\"binance\",\"symbol\":\"BTCUSDT\"},\"observation\":{\"available_at_ms\":60000,\"channel\":\"trade_flow\",\"coverage\":\"0\",\"event_time_ms\":60000,\"quality\":\"missing\",\"source\":\"binance:usdm:BTCUSDT:aggTrade\",\"values\":[],\"window_end_ms\":60000,\"window_start_ms\":0},\"schema_version\":1}"
+          ],
+          "pins": []
+        }
+      ]
+    }
+  },
+  "statuses": {
+    "observed": {
+      "state": "ready",
+      "reason": null,
+      "destination": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "quality": [
+        "observed"
+      ]
+    },
+    "missing": {
+      "state": "unavailable",
+      "reason": "auxiliary_inputs_unavailable",
+      "destination": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "quality": [
+        "missing"
+      ]
+    }
+  }
+}

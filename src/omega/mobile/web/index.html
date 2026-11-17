@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#ededed">
+  <link rel="manifest" href="/mobile/manifest.webmanifest">
+  <link rel="icon" href="/mobile/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/mobile/apple-touch-icon.png">
+  <title>ATM Omega Mobile</title>
+  <link rel="stylesheet" href="/mobile/style.css">
+  <script src="/mobile/app.js" defer></script>
+  <script src="/mobile/pwa.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><strong>ATM Ω</strong><span class="badge">PAPER</span></div>
+    <button id="logout" class="quiet" hidden>연결 해제</button>
+  </header>
+  <main>
+    <p class="notice">Android / iOS 공용 화면 · 외부 접속은 별도 사설 HTTPS 연결이 필요합니다. 선택형 push 알림은 PC와 브라우저 설정 후 사용할 수 있으며 도착을 보장하지 않습니다.</p>
+    <p id="shell-status" class="notice">브라우저 화면 · 설치 여부와 코어 연결 상태는 별개입니다.</p>
+    <button id="install-shell" class="quiet" hidden>홈 화면에 설치</button>
+    <button id="update-shell" class="quiet" hidden>화면 새 버전 열기</button>
+    <section id="pair-card" class="card">
+      <h1>기기 등록</h1>
+      <p>PC의 Omega 설정 → 기기에서 발급한 2분 유효 등록 코드를 입력하세요. 거래소 API 키나 PC 관리자 토큰을 넣지 마세요.</p>
+      <form id="pair-form">
+        <label for="device-name">기기 이름</label>
+        <input id="device-name" maxlength="64" autocomplete="off" placeholder="내 휴대폰" required>
+        <label for="pair-code">등록 코드</label>
+        <input id="pair-code" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        <button id="pair-button" type="submit">등록하고 연결</button>
+      </form>
+      <p class="muted">기기 인증 정보는 현재 브라우저 탭의 세션에만 보관됩니다. PC에서 언제든 권한을 철회할 수 있습니다.</p>
+    </section>
+    <div id="workspace" hidden>
+      <section class="card">
+        <div class="status-row"><h1>코어 상태</h1><span id="connection" class="badge">연결 중</span></div>
+        <p id="summary">최신 상태를 확인하고 있습니다.</p>
+        <p id="observed" class="muted"></p>
+        <p id="freshness" class="muted" role="status">현재 상태 미확인</p>
+        <div class="actions">
+          <button id="pause" disabled>전역 신규 진입 정지</button>
+          <button id="resume" class="resume" disabled>전역 신규 진입 허용</button>
+        </div>
+        <p class="muted">정지는 이후 신규 진입만 막습니다. 이미 제출한 주문은 유지하며 기존 포지션 관리는 계속합니다.</p>
+        <p class="muted">전역 허용은 계정별 정지·수동 복구·수집 또는 NN 준비를 대신하지 않습니다. 해당 계정의 복구는 PC에서 진행하세요.</p>
+      </section>
+      <section class="card"><h2>Paper v1 · 가상 포지션</h2><div id="positions" class="stack"></div></section>
+      <section class="card"><h2>Margin v2 · 가상 USDT 원장</h2><p class="muted">확정 원장의 기록이며 거래소 계정 조회·현재 호가가 아닙니다. 소비한 분·미체결·확인 불가 계정을 함께 확인하세요.</p><div id="margin-positions" class="stack"></div></section>
+      <section class="card"><h2>알림 <span id="incident-count"></span></h2><div id="incidents" class="stack"></div></section>
+      <section class="card"><h2>휴대폰 push 알림</h2>
+        <p id="push-status" role="status">PC의 선택형 push 설정을 확인하세요.</p>
+        <div class="actions"><button id="push-enable" disabled>이 기기에서 알림 받기</button><button id="push-disable" class="quiet" disabled>이 기기 알림 끄기</button></div>
+        <p class="muted">iOS는 홈 화면에 설치한 웹 앱에서 권한을 허용하세요. 일반 경고만 전송하며 PC가 꺼져 있으면 새 알림을 보낼 수 없습니다. OS 설정·네트워크에 따라 지연·누락될 수 있습니다. PC의 경보 확인과 거래 제어는 별도입니다.</p>
+      </section>
+      <section class="card"><h2>최근 제어 결과</h2><p id="operation">아직 요청한 명령이 없습니다.</p><button id="verify-operation" hidden>동일 명령 결과 확인</button></section>
+    </div>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+  <footer>실계정 주문 비활성화 · 설정 변경은 PC에서 진행하세요.</footer>
+</body>
+</html>

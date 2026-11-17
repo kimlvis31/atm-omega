@@ -1,5 +1,6 @@
 """Shared admission across accounts/clients, using caller-supplied provider scopes."""
 
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -15,7 +16,14 @@ class Window:
     seconds: int
 
     def __post_init__(self):
-        if not self.scope or self.limit <= 0 or self.seconds <= 0:
+        if (
+            not isinstance(self.scope, str)
+            or not self.scope
+            or type(self.limit) is not int
+            or type(self.seconds) is not int
+            or self.limit <= 0
+            or self.seconds <= 0
+        ):
             raise ValidationError("invalid rate window")
 
 
@@ -40,8 +48,8 @@ class RequestBudget:
             now = self._clock()
             if now < self._blocked_until:
                 raise RateLimited(self._blocked_until - now)
-            if any(v < 0 for v in costs.values()):
-                raise ValidationError("negative request weight")
+            if any(type(v) is not int or v < 0 for v in costs.values()):
+                raise ValidationError("request weight must be a nonnegative integer")
             if set(costs) - {w.scope for w in self._windows}:
                 raise ValidationError("request rate scope has no configured provider limit")
             proposed = []
@@ -56,15 +64,21 @@ class RequestBudget:
             self._used = dict(proposed)
 
     def cooldown(self, seconds: float) -> None:
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValidationError("invalid request cooldown")
         with self._lock:
             self._blocked_until = max(self._blocked_until, self._clock() + max(0, seconds))
 
     def observe_usage(self, scope: str, seconds: int, used: int) -> None:
         """Raise local usage from provider headers; a late header cannot lower it."""
-        if used < 0:
+        if type(used) is not int or used < 0:
             return
         with self._lock:
             if not any(w.scope == scope and w.seconds == seconds for w in self._windows):
                 return
-            key = scope, seconds, int(self._clock() // seconds)
+            now = self._clock()
+            self._used = {
+                key: value for key, value in self._used.items() if key[2] == int(now // key[1])
+            }
+            key = scope, seconds, int(now // seconds)
             self._used[key] = max(self._used.get(key, 0), used)

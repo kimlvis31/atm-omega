@@ -1,0 +1,57 @@
+{
+  "order_id": "btc-first",
+  "instrument": "binance:usdm:BTCUSDT",
+  "side": "BUY",
+  "quantity": "1",
+  "kind": "MARKET",
+  "price": null,
+  "reducing": false,
+  "reason": "manual_scenario",
+  "as_of_ms": 0,
+  "worst_execution_price": "100",
+  "fee_rate": "0.001",
+  "marks": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "price": "100",
+      "event_time_ms": 0,
+      "available_at_ms": 0
+    },
+    {
+      "instrument": "binance:usdm:ETHUSDT",
+      "price": "100",
+      "event_time_ms": 0,
+      "available_at_ms": 0
+    }
+  ],
+  "brackets": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "observed_at_ms": 0,
+      "available_at_ms": 0,
+      "rows": [
+        {
+          "notional_floor": "0",
+          "notional_cap": "1000000",
+          "maintenance_rate": "0.01",
+          "maintenance_amount": "0",
+          "max_leverage": 20
+        }
+      ]
+    },
+    {
+      "instrument": "binance:usdm:ETHUSDT",
+      "observed_at_ms": 0,
+      "available_at_ms": 0,
+      "rows": [
+        {
+          "notional_floor": "0",
+          "notional_cap": "1000000",
+          "maintenance_rate": "0.01",
+          "maintenance_amount": "0",
+          "max_leverage": 20
+        }
+      ]
+    }
+  ]
+}

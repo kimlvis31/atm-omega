@@ -1,0 +1,510 @@
+[
+  {
+    "model": "BSCALPHA",
+    "steps": 240,
+    "source_file_sha256": "8547a84a410f13eb518cb8145cae6b1224495d058c0ddffbe656122eaad9e8e5",
+    "source_function_sha256": "4f30b182b1c2c84a667eb5c0e0aa862beb41fd72aa777a99cea5243e6070831b",
+    "tracker": {
+      "tefVal_prev": 1.0,
+      "tefDir_prev": "SHORT",
+      "EMA_EMA_last": 100.1089,
+      "MMACD_MSDELTAABSMAREL_last": -1.01101,
+      "HTF_ISSHORT": true,
+      "MTF_CYCLICMAX": 1.01101
+    },
+    "direction": "SHORT",
+    "raw": 1.0
+  },
+  {
+    "model": "BSCBETA",
+    "steps": 240,
+    "source_file_sha256": "d57c23280bd99a0cd681fc6edf017a0dee91195c51db05296b6a9111b2b4f4af",
+    "source_function_sha256": "4c2611837d77865a3b6fd05f4cfbb90b8444a7371243fe6e0d45f1266c9544c0",
+    "tracker": {
+      "tefVal_prev": 0,
+      "tefDir_prev": "SHORT",
+      "EMA_EMA_last": 106.2183,
+      "MMACD_MSDELTAABSMAREL_last": -0.20109,
+      "DMIxADX_DMIxADXABSMAREL_last": 0.27671,
+      "MFI_MFIDEVABSMAREL_last": 1.26732,
+      "HTF_ISSHORT": true,
+      "MTF_ANCHOR": 0,
+      "ENTRY_PRICE": 0.0
+    },
+    "direction": "SHORT",
+    "raw": 0
+  },
+  {
+    "model": "CGALPHA",
+    "steps": 240,
+    "source_file_sha256": "95c8249933eff6a2c5aa07d449a720ff7718593132472f633c74109eed202195",
+    "source_function_sha256": "dcdbeb829c280beea3fc2b9893b0abe330671efbd9bcfbdc166c869a468dcd01",
+    "tracker": {
+      "tefVal_prev": 0.677347,
+      "tefDir_prev": "LONG",
+      "MMACD_MSDeltaAbsMARel_4h_prev": 2.22098,
+      "HTF_CyclicMax": 2.39004
+    },
+    "direction": "LONG",
+    "raw": 0.677347
+  },
+  {
+    "model": "MMACDDEFAULT",
+    "steps": 240,
+    "source_file_sha256": "ccc20add66151547d0bdf1ef7db7743d0744266a08bfca0d6b6eaa52daa27bec",
+    "source_function_sha256": "1d4ada8e2ffd8bad09f7f3920449fa3fb24e8934319024dc20daa9fceb406cc1",
+    "tracker": {
+      "tefVal_prev": 0.962753,
+      "tefVal_absMax": 0.980141,
+      "la_mmacd_msDeltaAbsMARel_prev": 1.98226,
+      "isDownhill": false
+    },
+    "direction": "LONG",
+    "raw": 0.962753
+  },
+  {
+    "model": "PATHFINDER",
+    "steps": 240,
+    "source_file_sha256": "8c208b2bf03570ff13a92375567846f8b01cc0830d5e0b23b60a3dcbb1c578ee",
+    "source_function_sha256": "808d283ca32c16f89ea8ec8ac1f8391d9224b7e690d915321193e9eae2826786",
+    "tracker": {
+      "tefVal_prev": -0.2,
+      "tefDir_prev": "SHORT",
+      "MODE": -1,
+      "LASTDIR": -1,
+      "MST_last": -1.01101,
+      "STS_last": 1.06239,
+      "AVGENTRY": 95.0404,
+      "CYC_ACTIVE": true,
+      "CYC_SIDE": -1,
+      "CYC_PEAK": 1.06239,
+      "CYC_BASE": 0.0,
+      "CYC_MAX": 0.2,
+      "NBUY": 1,
+      "NSELL": 0
+    },
+    "direction": "SHORT",
+    "raw": -0.2,
+    "partial_cases": [
+      {
+        "name": "mst_first",
+        "steps": [
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": true,
+              "5_MST_0_MST": 0.4,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 0,
+              "LASTDIR": 0,
+              "MST_last": 0.4,
+              "STS_last": null,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": false
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": true,
+              "5_MST_0_MST": 0.3,
+              "0_STS_S": -0.6,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.6,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.6,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": true,
+              "5_MST_0_MST": null,
+              "0_STS_S": -0.8,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.8,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.8,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": false,
+              "5_MST_0_MST": null,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.8,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.8,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": true,
+              "5_MST_0_MST": -0.7,
+              "0_STS_S": 0.5,
+              "KLINE_CLOSEPRICE": 99.0
+            },
+            "direction": "SHORT",
+            "raw": -0.15,
+            "tracker": {
+              "tefVal_prev": -0.15,
+              "tefDir_prev": "SHORT",
+              "MODE": -1,
+              "LASTDIR": -1,
+              "MST_last": -0.7,
+              "STS_last": 0.5,
+              "AVGENTRY": 99.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.5,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          }
+        ]
+      },
+      {
+        "name": "sts_first",
+        "steps": [
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": true,
+              "5_MST_0_MST": null,
+              "0_STS_S": -0.5,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 0,
+              "LASTDIR": 0,
+              "MST_last": null,
+              "STS_last": -0.5,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": false
+          },
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": false,
+              "5_MST_0_MST": 0.4,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.5,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": true,
+              "5_MST_0_MST": null,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.5,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": true,
+              "5_MST_0_MST": 0.3,
+              "0_STS_S": -0.8,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.4,
+              "STS_last": -0.8,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.8,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          }
+        ]
+      },
+      {
+        "name": "both_initially_missing",
+        "steps": [
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": true,
+              "5_MST_0_MST": null,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 0,
+              "LASTDIR": 0,
+              "MST_last": null,
+              "STS_last": null,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": false
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": false,
+              "5_MST_0_MST": 0.4,
+              "0_STS_S": -0.5,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 0,
+              "LASTDIR": 0,
+              "MST_last": null,
+              "STS_last": null,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": false
+          },
+          {
+            "features": {
+              "CLOSED_5": true,
+              "CLOSED_0": true,
+              "5_MST_0_MST": 0.6,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.0,
+            "tracker": {
+              "tefVal_prev": 0.0,
+              "tefDir_prev": "LONG",
+              "MODE": 0,
+              "LASTDIR": 0,
+              "MST_last": 0.6,
+              "STS_last": null,
+              "AVGENTRY": null,
+              "CYC_ACTIVE": false,
+              "CYC_SIDE": 0,
+              "CYC_PEAK": 0.0,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.0,
+              "NBUY": 0,
+              "NSELL": 0
+            },
+            "ready": false
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": true,
+              "5_MST_0_MST": null,
+              "0_STS_S": -0.6,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.6,
+              "STS_last": -0.6,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.6,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          },
+          {
+            "features": {
+              "CLOSED_5": false,
+              "CLOSED_0": false,
+              "5_MST_0_MST": null,
+              "0_STS_S": null,
+              "KLINE_CLOSEPRICE": 100.0
+            },
+            "direction": "LONG",
+            "raw": 0.2,
+            "tracker": {
+              "tefVal_prev": 0.2,
+              "tefDir_prev": "LONG",
+              "MODE": 1,
+              "LASTDIR": 1,
+              "MST_last": 0.6,
+              "STS_last": -0.6,
+              "AVGENTRY": 100.0,
+              "CYC_ACTIVE": true,
+              "CYC_SIDE": -1,
+              "CYC_PEAK": 0.6,
+              "CYC_BASE": 0.0,
+              "CYC_MAX": 0.2,
+              "NBUY": 1,
+              "NSELL": 0
+            },
+            "ready": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "model": "SPDDEFAULT",
+    "steps": 240,
+    "source_file_sha256": "535a48a8b84aac9450e77716def55e91431ab3bac0b881d3af7f053d69b152e0",
+    "source_function_sha256": "20c4e516c0559b3d94bc31be70e20d2124ac234cc977b008b2981f2eb43023c3",
+    "tracker": {
+      "tefVal_prev": -0.0,
+      "la_swing0_lsType_prev": 1
+    },
+    "direction": "SHORT",
+    "raw": -0.0
+  }
+]

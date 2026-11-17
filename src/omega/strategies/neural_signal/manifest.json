@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "api_version": "1",
+  "module_id": "neural_signal",
+  "label": "NN Signal Quantity Demo",
+  "description": "Explicit demo: finite NN feature to fixed signed quantity. Deadband holds the current position. Closed-minute local stop latches until manual resume. No model loading or automatic trading activation.",
+  "factory": "omega.strategies.neural_signal.module:create",
+  "validation_entry": "omega.strategies.neural_signal.conformance:validate",
+  "default_configuration": {
+    "signal_field": "NN.score",
+    "threshold": "0",
+    "quantity": "1",
+    "local_stop_rate": "0.05"
+  },
+  "configuration_schema": {
+    "type": "object",
+    "properties": {
+      "signal_field": {"type": "string", "title": "Required NN.* feature", "default": "NN.score", "x-omega-external-feature": {"namespace": "NN", "required": true}},
+      "threshold": {"type": "string", "title": "Nonnegative deadband threshold (hold position)", "default": "0"},
+      "quantity": {"type": "string", "title": "Positive fixed target quantity", "default": "1"},
+      "local_stop_rate": {"type": "string", "title": "Closed-minute stop rate (0 < rate < 1)", "default": "0.05"}
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "api_version": "1",
+  "module_id": "target_quantity",
+  "label": "Target Quantity",
+  "description": "Fixed signed quantity target, independent of TEF and exposure sizing.",
+  "factory": "omega.strategies.target_quantity.module:create",
+  "validation_entry": "omega.application.conformance:validate_target_quantity",
+  "default_configuration": {
+    "quantity": "1"
+  },
+  "configuration_schema": {
+    "type": "object",
+    "properties": {
+      "quantity": {
+        "type": "string",
+        "title": "Signed target quantity",
+        "default": "1"
+      }
+    }
+  }
+}

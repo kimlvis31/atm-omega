@@ -64,8 +64,8 @@ jobs:
         run: '"$VENV_PYTHON" -I -m pip --isolated check'
       - name: Style and dependency boundaries
         run: |
-          "$VENV_PYTHON" -I -m ruff check src tests
-          "$VENV_PYTHON" -I -m ruff format --check src tests
+          "$VENV_PYTHON" -I -m ruff check src tests scripts
+          "$VENV_PYTHON" -I -m ruff format --check src tests scripts
       - name: Network-free tests including spawned control owner
         run: '"$VENV_PYTHON" -I -m pytest --basetemp=.tools/pytest-ci -q'
       - name: Build package without fetching build dependencies

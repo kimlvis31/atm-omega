@@ -37,6 +37,11 @@ LAKEY_CLOSED_OSC = f"CLOSED_{OSC_IID}"
 LAKEY_CLOSEPRICE = "KLINE_CLOSEPRICE"
 LAKEY_MST = f"{MST_IID}_MST_0_MST"
 LAKEY_STS = f"{OSC_IID}_STS_S"
+# These closed inputs are cached independently even while the other is unavailable.
+CACHED_INPUTS = (
+    (LAKEY_CLOSED_MST, LAKEY_MST, "MST_last"),
+    (LAKEY_CLOSED_OSC, LAKEY_STS, "STS_last"),
+)
 PRICEFACTOR_MAX = 3.0
 MAGNITUDE_STEPS = 4
 

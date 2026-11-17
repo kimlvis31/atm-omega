@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "model": "linear_usdt_scenario_rate_v1",
+  "points": [
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "event_time_ms": 60000,
+      "source_available_at_ms": 60001,
+      "reference_time_ms": 60000,
+      "rate": "0.0001",
+      "reference_price": "100"
+    },
+    {
+      "instrument": "binance:usdm:BTCUSDT",
+      "event_time_ms": 120000,
+      "source_available_at_ms": 120001,
+      "reference_time_ms": 120000,
+      "rate": "-0.0001",
+      "reference_price": "100"
+    }
+  ]
+}

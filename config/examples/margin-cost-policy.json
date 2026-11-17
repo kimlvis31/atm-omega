@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "model": "linear_usdt_ohlcv_cost_v1",
+  "slippage_rate": "0.001",
+  "execution_price_bound_rate": "0.05",
+  "mark_drift_bound_rate": "0.05",
+  "entry_delay_ms": 1,
+  "reduction_delay_ms": 0,
+  "limit_price_policy": "adverse_then_cap_v1"
+}

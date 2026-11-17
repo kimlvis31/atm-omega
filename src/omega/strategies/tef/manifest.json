@@ -1,0 +1,761 @@
+{
+  "schema_version": 1,
+  "api_version": "1",
+  "module_id": "tef",
+  "label": "TEF",
+  "description": "TEF models, margin allocation, entry/resize/reversal and local stop/reentry policy.",
+  "factory": "omega.strategies.tef.module:create",
+  "validation_entry": "omega.application.conformance:validate_tef",
+  "models": [
+    "BSCALPHA",
+    "BSCBETA",
+    "CGALPHA",
+    "MMACDDEFAULT",
+    "PATHFINDER",
+    "SPDDEFAULT"
+  ],
+  "default_configuration": {
+    "model": "MMACDDEFAULT"
+  },
+  "configuration_schema": {
+    "type": "object",
+    "properties": {
+      "model": {
+        "type": "string",
+        "title": "TEF function",
+        "enum": [
+          "BSCALPHA",
+          "BSCBETA",
+          "CGALPHA",
+          "MMACDDEFAULT",
+          "PATHFINDER",
+          "SPDDEFAULT"
+        ],
+        "default": "MMACDDEFAULT"
+      },
+      "direction": {
+        "type": "string",
+        "title": "Direction",
+        "enum": [
+          "BOTH",
+          "LONG",
+          "SHORT"
+        ],
+        "default": "BOTH"
+      },
+      "order_type": {
+        "type": "string",
+        "title": "Order type",
+        "enum": [
+          "MARKET",
+          "LIMIT",
+          "ADAPTIVE"
+        ],
+        "default": "MARKET"
+      },
+      "order_offset": {
+        "type": "string",
+        "title": "Order offset (%)",
+        "default": "0",
+        "x-display-percent": true
+      },
+      "fullStopLossImmediate": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Local FSL immediate (%)",
+        "default": null,
+        "x-display-percent": true
+      },
+      "fullStopLossClose": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Local FSL close (%)",
+        "default": null,
+        "x-display-percent": true
+      },
+      "postStopLossReentry": {
+        "type": "boolean",
+        "title": "Post-stop-loss reentry",
+        "default": false
+      },
+      "stopTradeOnFSL": {
+        "type": "boolean",
+        "title": "Stop trading on FSL",
+        "default": true
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "BSCALPHA"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "HTF_Bias": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_S": {
+                  "type": "number",
+                  "default": 0.01,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_L": {
+                  "type": "number",
+                  "default": 0.01,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_ReversalThreshold_Entry_S": {
+                  "type": "number",
+                  "default": 0.8,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_ReversalThreshold_Entry_L": {
+                  "type": "number",
+                  "default": 0.8,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_ReversalThreshold_Exit_S": {
+                  "type": "number",
+                  "default": 0.8,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_ReversalThreshold_Exit_L": {
+                  "type": "number",
+                  "default": 0.8,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "BSCBETA"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "HTF_Bias": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_S": {
+                  "type": "number",
+                  "default": 0.01,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_L": {
+                  "type": "number",
+                  "default": 0.01,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_Alpha_Entry_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Alpha_Entry_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Alpha_Exit_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Alpha_Exit_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_Entry_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_Entry_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_Exit_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_Exit_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "CGALPHA"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "HTF_Bias": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_S": {
+                  "type": "number",
+                  "default": 0.7,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_ReversalThreshold_L": {
+                  "type": "number",
+                  "default": 0.7,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_S": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_Strength_L": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "HTF_DMIxADX_Alpha": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "MTF_PSAR_DCC_Alpha": {
+                  "type": "number",
+                  "default": 10.0,
+                  "minimum": 1.0,
+                  "maximum": 100.0
+                },
+                "MTF_PSAR_Weight": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_Bias_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "MTF_Alpha_S_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "MTF_Alpha_L_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "MTF_Alpha_S_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "MTF_Alpha_L_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "MTF_Beta_S_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_L_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_S_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "MTF_Beta_L_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "IVP_Alpha": {
+                  "type": "number",
+                  "default": 0.03,
+                  "minimum": 0.001,
+                  "maximum": 0.5
+                },
+                "STF_WOI_Weight": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "STF_Bias_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "STF_Bias_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "STF_Alpha_S_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "STF_Alpha_L_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "STF_Alpha_S_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "STF_Alpha_L_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "STF_Beta_S_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "STF_Beta_L_Entry": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "STF_Beta_S_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                },
+                "STF_Beta_L_Exit": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 10.0
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "MMACDDEFAULT"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "alpha": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0001,
+                  "maximum": 5.0
+                },
+                "beta": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 1.0,
+                  "maximum": 10.0
+                },
+                "delta": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "shortStrength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "longStrength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "downHillThreshold": {
+                  "type": "number",
+                  "default": 0.8,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "PATHFINDER"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "MST_Deadzone": {
+                  "type": "number",
+                  "default": 0.1,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "MST_Bias": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "Swap_Ratio_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "Swap_Ratio_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "Acc_Threshold_S": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "Acc_Threshold_L": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "TP_Threshold_S": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "TP_Threshold_L": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "Impulse_Span_S": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "Impulse_Span_L": {
+                  "type": "number",
+                  "default": 0.3,
+                  "minimum": 0.01,
+                  "maximum": 1.0
+                },
+                "Acc_Step_S": {
+                  "type": "number",
+                  "default": 0.2,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "Acc_Step_L": {
+                  "type": "number",
+                  "default": 0.2,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "TP_Step_S": {
+                  "type": "number",
+                  "default": 0.2,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "TP_Step_L": {
+                  "type": "number",
+                  "default": 0.2,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "Acc_MSTGain_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "Acc_MSTGain_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "TP_MSTGain_S": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "TP_MSTGain_L": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "Consec_Gain_S": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "Consec_Gain_L": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "Price_Gain_S": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "Price_Gain_L": {
+                  "type": "number",
+                  "default": 0.5,
+                  "minimum": 0.0,
+                  "maximum": 5.0
+                },
+                "Loss_Threshold_S": {
+                  "type": "number",
+                  "default": 0.02,
+                  "minimum": 0.0,
+                  "maximum": 0.2
+                },
+                "Loss_Threshold_L": {
+                  "type": "number",
+                  "default": 0.02,
+                  "minimum": 0.0,
+                  "maximum": 0.2
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "model": {
+              "const": "SPDDEFAULT"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "title": "TEF parameters",
+              "properties": {
+                "shortDelta": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "shortStrength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "shortLength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "longDelta": {
+                  "type": "number",
+                  "default": 0.0,
+                  "minimum": -1.0,
+                  "maximum": 1.0
+                },
+                "longStrength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "longLength": {
+                  "type": "number",
+                  "default": 1.0,
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "description": "Closed-candle paper preview; SPDDEFAULT supports confirmed SWING pivots. CGALPHA/PATHFINDER need additional analysis providers."
+  }
+}

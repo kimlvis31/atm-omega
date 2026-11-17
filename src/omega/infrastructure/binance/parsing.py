@@ -5,6 +5,7 @@ from omega.domain.models import (
     Candle,
     Fill,
     Instrument,
+    Market,
     OrderObservation,
     OrderStatus,
     Side,
@@ -63,6 +64,17 @@ def trade_fill(account: str, instrument: Instrument, row: dict) -> Fill:
             if not isinstance(buyer, bool):
                 raise ProtocolError("isBuyer must be boolean")
             side = "BUY" if buyer else "SELL"
+        reported = {}
+        if "quoteQty" in row:
+            if type(row["quoteQty"]) is not str:
+                raise ProtocolError("reported quote quantity must be a decimal string")
+            reported["quote_quantity"] = decimal(row["quoteQty"])
+        if instrument.market == Market.USDM and ("realizedPnl" in row or "marginAsset" in row):
+            if type(row.get("realizedPnl")) is not str:
+                raise ProtocolError("reported PnL requires its decimal string and margin asset")
+            reported.update(
+                realized_pnl=decimal(row["realizedPnl"]), realized_pnl_asset=row["marginAsset"]
+            )
         return Fill(
             account,
             instrument,
@@ -74,6 +86,7 @@ def trade_fill(account: str, instrument: Instrument, row: dict) -> Fill:
             decimal(row["commission"]),
             row["commissionAsset"],
             int(row["time"]),
+            **reported,
         )
     except (KeyError, TypeError, ValueError, ValidationError):
         raise ProtocolError("unsupported trade response schema") from None

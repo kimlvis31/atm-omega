@@ -151,6 +151,12 @@ class UsdmAdapter:
     def query(self, instrument: Instrument, client_order_id: str) -> OrderObservation:
         return self._orders.query(instrument, client_order_id)
 
+    def open_orders(self):
+        return self._orders.open_orders()
+
+    def open_conditional_orders(self):
+        return self._orders.open_conditional_orders()
+
     def cancel(self, instrument: Instrument, client_order_id: str) -> OrderObservation:
         return self._orders.cancel(instrument, client_order_id)
 

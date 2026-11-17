@@ -4,25 +4,15 @@ from collections import deque
 from dataclasses import dataclass
 from itertools import combinations
 
+from omega.analysis.aggregation import (
+    INTERVAL_MINUTES,
+    CandleAggregation,
+    bars_from_dependencies,
+    validate_minute,
+)
 from omega.domain.errors import ValidationError
 from omega.domain.models import Candle, Instrument
 from omega.ports.modules import ModuleDescriptor
-
-# Calendar/week/month alignment needs a calendar adapter, not a fixed-duration guess.
-INTERVAL_MINUTES = {
-    0: 1,
-    1: 3,
-    2: 5,
-    3: 15,
-    4: 30,
-    5: 60,
-    6: 120,
-    7: 240,
-    8: 360,
-    9: 480,
-    10: 720,
-    11: 1440,
-}
 
 
 @dataclass(frozen=True)
@@ -36,7 +26,8 @@ class MaConfiguration:
     def __post_init__(self):
         periods = self.mmacd_periods
         if (
-            self.interval_id not in INTERVAL_MINUTES
+            type(self.interval_id) is not int
+            or self.interval_id not in INTERVAL_MINUTES
             or type(self.price_precision) is not int
             or not 0 <= self.price_precision <= 16
             or type(self.signal_period) is not int
@@ -134,30 +125,32 @@ class LegacyMaFeatures:
             raise ValidationError("one shared configuration per interval required")
         self.instrument = instrument
         self._kernels = {c.interval_id: _Kernel(c) for c in configurations}
-        self._buckets: dict[int, tuple[int, int]] = {}
+        self._aggregation = CandleAggregation(instrument, tuple(self._kernels))
         self._last: Candle | None = None
         self._result: dict = {}
 
     def update(self, candle: Candle) -> dict:
-        if candle.instrument != self.instrument:
-            raise ValidationError("analysis instrument mismatch")
-        if self._last is not None:
-            if candle == self._last:
-                return dict(self._result)
-            if candle.open_time_ms != self._last.close_time_ms:
-                raise ValidationError("analysis needs contiguous immutable minute replay")
+        return self._update(candle, self._aggregation.update(candle), include_closure=True)
+
+    def update_with(self, candle: Candle, inputs: dict) -> dict:
+        bars = bars_from_dependencies(inputs, candle, self._kernels)
+        return self._update(
+            candle, {f"BAR_{iid}": bar for iid, bar in bars.items()}, include_closure=False
+        )
+
+    def _update(self, candle: Candle, frames: dict, *, include_closure: bool) -> dict:
+        validate_minute(self.instrument, self._last, candle)
+        if candle == self._last:
+            return dict(self._result)
         result = {}
         for iid, kernel in self._kernels.items():
-            duration = INTERVAL_MINUTES[iid] * 60_000
-            bucket = candle.open_time_ms // duration * duration
-            previous_bucket, count = self._buckets.get(iid, (-1, 0))
-            count = count + 1 if previous_bucket == bucket else 1
-            self._buckets[iid] = (bucket, count)
-            complete = candle.close_time_ms == bucket + duration and count == INTERVAL_MINUTES[iid]
-            values = kernel.preview(float(candle.close))
+            frame = frames[f"BAR_{iid}"]
+            complete = frame.complete
+            values = kernel.preview(float(frame.close))
             # Starting inside a higher bar cannot seed a fabricated full aggregate.
-            complete_prefix = count == (candle.close_time_ms - bucket) // 60_000
-            result[f"CLOSED_{iid}"] = complete
+            complete_prefix = frame.valid_prefix
+            if include_closure:
+                result[f"CLOSED_{iid}"] = complete
             if kernel.config.ema_period:
                 result[f"{iid}_EMA_0_EMA"] = (
                     values["mas"][kernel.config.ema_period] if complete_prefix else None
@@ -171,6 +164,6 @@ class LegacyMaFeatures:
                     values["absolute"] if complete_prefix else None
                 )
             if complete:
-                kernel.commit(float(candle.close), values)
+                kernel.commit(float(frame.close), values)
         self._last, self._result = candle, result
         return dict(result)

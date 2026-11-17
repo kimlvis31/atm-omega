@@ -8,6 +8,25 @@ instance_id = "omega-main"
 autostart = false
 single_instance = true
 
+[console]
+# The core terminal accepts commands when stdin is interactive.
+interactive = true
+# Open a separate visible log terminal at core startup (desktop session required).
+log_autostart = false
+
+[references]
+# Signed read-only leverage bracket refresh; requires a separately authorized account provider.
+# Without one the core reports auth_required and performs no private network request.
+refresh_leverage_on_start = true
+
+[collection]
+# Applied at Core startup to owned collectors and manual REST gap refetch.
+# OFF preserves the existing normalized REST history path.
+# ON archives actual public response bodies before publishing captured observations.
+# Storage grows under [paths].data_dir/raw/candles; there is no automatic retention cleanup.
+# Standalone collect uses --capture-rest-raw / --raw-directory instead of this setting.
+capture_rest_raw = false
+
 [runtime]
 start_method = "spawn"
 ready_timeout_s = 30
@@ -18,6 +37,14 @@ health_interval_s = 5
 profile = "auto"
 lazy_batch_workers = true
 lazy_gpu_workers = true
+
+# Applied at the next core startup; charged causal evidence, not total disk use.
+# Existing evidence is preserved. No automatic deletion of proofs or pins.
+[neural_evidence]
+max_bytes = 536870912
+max_records = 100000
+max_pins = 2048
+warning_percent = 80
 
 [safety]
 on_live_anomaly = "block_new_risk_keep_protection_and_recovery"
@@ -30,6 +57,7 @@ on_all_recording_failure = "block_new_risk_manage_existing_emit_critical"
 [paths]
 # Relative to the Omega root, not the launcher's current working directory.
 data_dir = "./data"
+# Optional REST page bodies/receipts use this data_dir's raw/candles subdirectory.
 artifact_dir = "./artifacts"
 runtime_settings_store = "./state/settings.json"
 bootstrap_log_dir = "./logs/bootstrap"

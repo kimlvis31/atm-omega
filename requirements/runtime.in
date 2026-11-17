@@ -1,2 +1,3 @@
 # Optional public market streaming dependency. Domain and REST remain stdlib-only.
 websockets==17.2
+psycopg[binary]==3.3.6

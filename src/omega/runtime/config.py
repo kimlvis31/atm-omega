@@ -4,11 +4,12 @@ import math
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
 from omega.domain.errors import ValidationError
+from omega.runtime.causal_capacity import EvidenceBudgetLimits
 
 SAFETY_POLICY = {
     "on_live_anomaly": "block_new_risk_keep_protection_and_recovery",
@@ -30,6 +31,10 @@ TABLE_KEYS = {
     "resources": {"profile", "lazy_batch_workers", "lazy_gpu_workers"},
     "safety": set(SAFETY_POLICY),
     "paths": set(PATH_DEFAULTS),
+    "console": {"interactive", "log_autostart"},
+    "references": {"refresh_leverage_on_start"},
+    "neural_evidence": {"max_bytes", "max_records", "max_pins", "warning_percent"},
+    "collection": {"capture_rest_raw"},
 }
 
 
@@ -45,6 +50,11 @@ class MasterConfig:
     lazy_batch_workers: bool
     lazy_gpu_workers: bool
     paths: Mapping[str, Path]
+    console_interactive: bool = True
+    log_autostart: bool = False
+    refresh_leverage_on_start: bool = True
+    neural_evidence: EvidenceBudgetLimits = field(default_factory=EvidenceBudgetLimits)
+    capture_rest_raw: bool = False
 
 
 def load_master(root: Path, path: Path | None = None) -> MasterConfig:
@@ -101,6 +111,11 @@ def load_master(root: Path, path: Path | None = None) -> MasterConfig:
         _boolean(resources, "lazy_batch_workers", True),
         _boolean(resources, "lazy_gpu_workers", True),
         MappingProxyType(paths),
+        _boolean(data.get("console", {}), "interactive", True),
+        _boolean(data.get("console", {}), "log_autostart", False),
+        _boolean(data.get("references", {}), "refresh_leverage_on_start", True),
+        EvidenceBudgetLimits(**data.get("neural_evidence", {})),
+        _boolean(data.get("collection", {}), "capture_rest_raw", False),
     )
 
 

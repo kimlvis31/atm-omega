@@ -3,6 +3,7 @@
 from omega.domain.errors import OrderOutcomeUnknown, ProtocolError, ValidationError
 from omega.domain.models import Fill, Instrument, Market, OrderObservation
 from omega.infrastructure.binance.client import BinanceClient
+from omega.infrastructure.binance.inventory import read_inventory
 from omega.infrastructure.binance.parsing import order_observation, trade_fill
 
 
@@ -18,6 +19,12 @@ class OrderQueries:
     def check(self, instrument: Instrument):
         if instrument.provider != "binance" or instrument.market != self.market:
             raise ValidationError("instrument belongs to another adapter")
+
+    def open_orders(self):
+        return read_inventory(self.market, self.account_id, self.client)
+
+    def open_conditional_orders(self):
+        return read_inventory(self.market, self.account_id, self.client, conditional=True)
 
     def query(self, instrument: Instrument, client_order_id: str) -> OrderObservation:
         self.check(instrument)

@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "events": [
+    {
+      "kind": "ExecutionFillFact",
+      "schema_version": 1,
+      "scan": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "initial_from_id": "0"
+      },
+      "fill": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "trade_id": "1",
+        "provider_order_id": "7",
+        "side": "BUY",
+        "quantity": "1",
+        "price": "100",
+        "fee": "0.1",
+        "fee_asset": "USDT",
+        "timestamp_ms": 60000
+      },
+      "sha256": "b5a4d3fdd8bdecd83a2cc4450bad636bc3d60c115fb9079e93b01e531e6d1a27"
+    },
+    {
+      "kind": "ExecutionFillPage",
+      "schema_version": 1,
+      "scan": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "initial_from_id": "0"
+      },
+      "revision": 1,
+      "previous_sha256": null,
+      "from_id": "0",
+      "through_id": "1",
+      "trade_ids": [
+        "1"
+      ],
+      "returned_count": 1,
+      "page_hash": "3d970ac7760e5b7d318626d40fc5bc9d6fd12dc99567d36afd808c4211e93ed3",
+      "sha256": "08e0124fa5ed5d71be71385cdf22175b2552e2488e0fe5651e53b4674dd67020"
+    },
+    {
+      "kind": "ExecutionFillFact",
+      "schema_version": 1,
+      "scan": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "initial_from_id": "0"
+      },
+      "fill": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "trade_id": "1",
+        "provider_order_id": "7",
+        "side": "BUY",
+        "quantity": "1",
+        "price": "100",
+        "fee": "0.1",
+        "fee_asset": "USDT",
+        "timestamp_ms": 60000
+      },
+      "sha256": "b5a4d3fdd8bdecd83a2cc4450bad636bc3d60c115fb9079e93b01e531e6d1a27"
+    },
+    {
+      "kind": "ExecutionFillFact",
+      "schema_version": 1,
+      "scan": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "initial_from_id": "0"
+      },
+      "fill": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "trade_id": "2",
+        "provider_order_id": "7",
+        "side": "BUY",
+        "quantity": "1",
+        "price": "100",
+        "fee": "0.1",
+        "fee_asset": "USDT",
+        "timestamp_ms": 60001
+      },
+      "sha256": "868ce83d108c55002420777e9ffb814f1c53ccc912c04e3d9359c22ff7bbae0e"
+    },
+    {
+      "kind": "ExecutionFillPage",
+      "schema_version": 1,
+      "scan": {
+        "account_id": "synthetic-v1-fixture",
+        "instrument": "binance:spot:BTCUSDT",
+        "initial_from_id": "0"
+      },
+      "revision": 2,
+      "previous_sha256": "08e0124fa5ed5d71be71385cdf22175b2552e2488e0fe5651e53b4674dd67020",
+      "from_id": "1",
+      "through_id": "2",
+      "trade_ids": [
+        "1",
+        "2"
+      ],
+      "returned_count": 2,
+      "page_hash": "2fef638674f8c939901e7ad681840f26681baecbbb658b008b451fdf98ebb964",
+      "sha256": "9a3c252c5bc1610370c9c86d6a87abf82edefaa73dc12022c3cc6aeebd06db14"
+    }
+  ],
+  "expected": {
+    "account_id": "synthetic-v1-fixture",
+    "instrument": "binance:spot:BTCUSDT",
+    "cursor": 2,
+    "facts": 2,
+    "last_page_sha256": "9a3c252c5bc1610370c9c86d6a87abf82edefaa73dc12022c3cc6aeebd06db14"
+  }
+}

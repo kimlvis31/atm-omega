@@ -12,11 +12,11 @@ from omega.application.strategies import StrategyRunner
 from omega.domain.errors import ProtocolError
 from omega.domain.models import Candle, Instrument, Market, decimal
 from omega.domain.safety import BlockReason, EntryGate
+from omega.domain.trading import BudgetView, ExecutionConstraints, PositionView, TradeContext
 from omega.infrastructure.binance.streams import StreamPlan
-from omega.infrastructure.candles import SqliteCandleStore
 from omega.ports.collection import MinuteObservation
 from omega.runtime.collection import CollectionWorker
-from omega.strategies.tef.strategy import TefStrategy
+from omega.strategies.tef.module import TefModule
 
 INSTRUMENT = Instrument("binance", Market.USDM, "BTCUSDT")
 
@@ -30,11 +30,30 @@ def obs(n, price="100"):
     return MinuteObservation(bar(n, price), "websocket", 600_000)
 
 
+class MemoryCandleStore:
+    """A collection-service test double; real durability is tested against PostgreSQL."""
+
+    def __init__(self):
+        self.rows = {}
+
+    def get(self, instrument, open_time_ms):
+        return self.rows.get((instrument, open_time_ms))
+
+    def put(self, observation):
+        candle = observation.candle
+        key = candle.instrument, candle.open_time_ms
+        prior = self.rows.get(key)
+        if prior is not None:
+            if prior != candle:
+                raise ProtocolError("conflicting closed minute")
+            return False
+        self.rows[key] = candle
+        return True
+
+
 @pytest.fixture
-def store(tmp_path):
-    value = SqliteCandleStore(tmp_path / "test.sqlite")
-    yield value
-    value.close()
+def store():
+    return MemoryCandleStore()
 
 
 def test_reorder_dedup_gap_and_conflict_retain_original(store):
@@ -74,26 +93,6 @@ def test_reorder_bound_and_open_minute(store):
         collector.accept(obs(2), now_ms=600_000)
     with pytest.raises(ProtocolError, match="future"):
         collector.accept(obs(0), now_ms=30_000)
-
-
-def test_persistence_raw_duplicate_restart_and_market_identity(tmp_path):
-    path = tmp_path / "new.sqlite"
-    store = SqliteCandleStore(path)
-    assert store.put(MinuteObservation(bar(0), "rest", 60_000))
-    assert not store.put(MinuteObservation(bar(0), "websocket", 60_002, '{"original":true}'))
-    assert store.connection.execute("SELECT raw FROM minutes").fetchone()[0] == '{"original":true}'
-    spot = Instrument("binance", Market.SPOT, "BTCUSDT")
-    c = bar(0)
-    assert store.put(
-        MinuteObservation(
-            Candle(spot, 0, 60_000, c.open, c.high, c.low, c.close, c.volume), "rest", 60_000
-        )
-    )
-    store.close()
-    reopened = SqliteCandleStore(path)
-    assert reopened.get(INSTRUMENT, 0) == bar(0)
-    assert reopened.get(spot, 0).instrument == spot
-    reopened.close()
 
 
 class History:
@@ -147,7 +146,18 @@ def test_no_data_no_spin_and_strategy_pipeline_shared_for_100_instances(store):
         )
     )
     runner = StrategyRunner(
-        graph, {str(n): TefStrategy("MMACDDEFAULT", INSTRUMENT) for n in range(100)}
+        graph,
+        {str(n): TefModule(INSTRUMENT) for n in range(100)},
+        lambda _name, candle, features: TradeContext(
+            INSTRUMENT,
+            candle.close,
+            candle.close_time_ms,
+            PositionView(),
+            BudgetView(decimal("1000"), decimal("1000")),
+            ExecutionConstraints(can_short=True),
+            candle,
+            features,
+        ),
     )
     collector = MinuteCollector({INSTRUMENT: 0}, store, runner.update)
     history = History([bar(n, str(100 + (n % 7))) for n in range(100)])
@@ -156,9 +166,11 @@ def test_no_data_no_spin_and_strategy_pipeline_shared_for_100_instances(store):
     )
     asyncio.run(worker.repair())
     assert collector.cursor[INSTRUMENT] == 6_000_000
-    assert len(runner.signals) == 100
-    assert len({s.target_exposure for s in runner.signals.values()}) == 1
-    assert all(s.available_at_ms == 6_000_000 for s in runner.signals.values())
+    assert len(runner.decisions) == 100 and not runner.errors
+    assert len(set(runner.decisions.values())) == 1
+    assert all(
+        e.module.model._last_candle.close_time_ms == 6_000_000 for e in runner.engines.values()
+    )
     history.rows.clear()
     worker.clock_ms = lambda: 6_120_002
     calls = len(history.calls)
@@ -248,3 +260,86 @@ def test_worker_reconnects_read_only_transport_failure_and_stops_backoff(store):
         assert not collector.connected
 
     asyncio.run(scenario())
+
+
+def test_partial_frames_do_not_trigger_a_rest_request_for_every_message(store, monkeypatch):
+    from omega.domain.errors import TransportError
+
+    class Socket:
+        count = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def recv(self):
+            self.count += 1
+            if self.count == 101:
+                raise TransportError("end fixture")
+            return "partial frame"
+
+    monkeypatch.setattr(StreamPlan, "decode", lambda *_args, **_kwargs: None)
+    history = History([])
+    collector = MinuteCollector({INSTRUMENT: 0}, store, lambda _c: None)
+    worker = CollectionWorker(
+        StreamPlan(Market.USDM, (INSTRUMENT,)),
+        history,
+        collector,
+        clock_ms=lambda: 180_000,
+        monotonic=lambda: 0,
+        connect=lambda _plan: Socket(),
+    )
+    with pytest.raises(TransportError):
+        asyncio.run(worker.session())
+    assert history.calls == [(0, 180_000)]
+    assert not collector.connected and not collector.ready(INSTRUMENT, 180_000)
+
+
+def test_stop_waits_for_owned_history_thread_without_publishing_its_late_result(store):
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    received = []
+
+    class BlockingHistory:
+        def closed_minutes(self, *_args, **_kwargs):
+            entered.set()
+            assert release.wait(3)
+            return (bar(0),)
+
+    class Socket:
+        closed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            self.closed = True
+
+    async def scenario():
+        socket = Socket()
+        collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
+        worker = CollectionWorker(
+            StreamPlan(Market.USDM, (INSTRUMENT,)),
+            BlockingHistory(),
+            collector,
+            clock_ms=lambda: 60_001,
+            connect=lambda _plan: socket,
+        )
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run(stop))
+        assert await asyncio.to_thread(entered.wait, 1)
+        stop.set()
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        release.set()
+        await asyncio.wait_for(task, 1)
+        assert socket.closed and not collector.connected
+        assert received == [] and store.rows == {}
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
