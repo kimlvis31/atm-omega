@@ -556,11 +556,14 @@ class VisionArchive:
             if channel == "metrics" and values[1] != instrument.symbol:
                 raise ValueError
             if channel == "agg_trade":
-                if not all(values[index].isdigit() for index in (0, 3, 4)) or int(values[3]) > int(
+                if not values[0].isdigit() or values[6].lower() not in {"true", "false", "1", "0"}:
+                    raise ValueError
+                # Some early Spot archives contain zero-value placeholders with no trade IDs.
+                if instrument.market == Market.SPOT and values[1:5] == ("0", "0", "-1", "-1"):
+                    return None
+                if not values[3].isdigit() or not values[4].isdigit() or int(values[3]) > int(
                     values[4]
                 ):
-                    raise ValueError
-                if values[6].lower() not in {"true", "false", "1", "0"}:
                     raise ValueError
             return timestamp
         except (ValueError, TypeError, OverflowError, IndexError):
@@ -647,6 +650,8 @@ class VisionArchive:
                         stamp = self._timestamp(
                             instrument, channel, values, descriptor.day_start_ms
                         )
+                        if stamp is None:
+                            continue
                         row = VisionRow(
                             instrument, channel, stamp, values, columns, number, receipt
                         )

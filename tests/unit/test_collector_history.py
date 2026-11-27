@@ -1,4 +1,5 @@
 import asyncio
+import zipfile
 from dataclasses import dataclass
 from decimal import Decimal
 from threading import Event
@@ -9,6 +10,7 @@ import pytest
 from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
+from omega.infrastructure.binance.vision import VisionArchive
 from omega.infrastructure.binance.vision_market import VisionMarketData
 from omega.runtime.collect_aux_live import LiveAuxiliary
 from omega.runtime.collector_aux_history import (
@@ -91,6 +93,35 @@ def test_archive_trade_uses_native_flow_contract_and_actual_receipt():
     assert trade.available_at_ms == 500000
     assert trade.trade_time_ms == 120001
     assert trade.buyer_is_maker and trade.trade_count == 2 and trade.quantity == Decimal("0.2")
+
+
+@pytest.mark.parametrize("placeholder_quantity", ["0", "1"])
+def test_spot_trade_archive_skips_only_zero_value_placeholders(
+    tmp_path, monkeypatch, placeholder_quantity
+):
+    instrument = Instrument("binance", Market.SPOT, "BNBUSDT")
+    day = 1_512_345_600_000
+    descriptor = SimpleNamespace(
+        object_key="BNBUSDT-aggTrades-2017-12-04.zip", day_start_ms=day
+    )
+    archive_path = tmp_path / descriptor.object_key
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "BNBUSDT-aggTrades-2017-12-04.csv",
+            f"1,2.48,56,10,10,{day + 20},True,True\n"
+            f"2,0,{placeholder_quantity},-1,-1,{day + 10},True,True\n"
+            f"3,2.48,57,11,11,{day + 30},True,True\n",
+        )
+    vision = VisionArchive(tmp_path)
+    monkeypatch.setattr(
+        vision, "_archive", lambda *_: SimpleNamespace(archive_path=archive_path)
+    )
+    if placeholder_quantity == "0":
+        rows = list(vision._file_rows(instrument, "agg_trade", descriptor))
+        assert [(row.values[0], row.row_number) for row in rows] == [("1", 1), ("3", 3)]
+    else:
+        with pytest.raises(ProtocolError, match="invalid Vision CSV identity"):
+            list(vision._file_rows(instrument, "agg_trade", descriptor))
 
 
 def test_history_checkpoint_only_advances_after_every_batch_commits(tmp_path, monkeypatch):
