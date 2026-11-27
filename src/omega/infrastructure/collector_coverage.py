@@ -89,11 +89,12 @@ def recent_unconfirmed_trades(db, by_series, now, retry, *, limit=60):
                 if retry.get((instrument.key, opening), 0) <= now:
                     yield opening, series_id
 
+    series_order = {series_id: index for index, series_id in enumerate(sorted(by_series))}
     selected = list(
         islice(
             merge(
                 *(openings(series_id, gaps) for series_id, gaps in per_series.items()),
-                key=lambda slot: slot[0],
+                key=lambda slot: (slot[0], -series_order[slot[1]]),
                 reverse=True,
             ),
             limit,

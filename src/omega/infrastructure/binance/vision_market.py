@@ -13,11 +13,12 @@ MINUTE = 60_000
 class VisionMarketData:
     native_observations = True
 
-    def __init__(self, rest, vision, *, cached=None, clock_ms=None):
+    def __init__(self, rest, vision, *, cached=None, clock_ms=None, on_unaligned_bar=None):
         self.rest, self.vision, self.cached = rest, vision, cached
         self.market, self.client, self.prefix = rest.market, rest.client, rest.prefix
         self.raw_archive = rest.raw_archive
         self.clock_ms = clock_ms or self.client.clock_ms
+        self.on_unaligned_bar = on_unaligned_bar
 
     @property
     def last_symbol_diagnostics(self):
@@ -95,11 +96,17 @@ class VisionMarketData:
                     raise ProtocolError("unsupported Vision kline columns")
                 scale = 1000 if int(values[0]) >= 100_000_000_000_000 else 1
                 closed = int(values[6]) // scale + 1
+                if not low <= opened < high or closed > now_ms:
+                    raise ProtocolError("Vision candle is outside its requested closed range")
+                if self.on_unaligned_bar is not None and (
+                    opened % MINUTE or closed - opened != MINUTE
+                ):
+                    # Preserve the source row in its archive. It cannot certify a closed 1m slot.
+                    self.on_unaligned_bar(instrument, opened, closed, item.row_number)
+                    continue
                 candle = Candle(
                     instrument, opened, closed, *(decimal(value) for value in values[1:6])
                 )
-                if not low <= opened < high or closed > now_ms:
-                    raise ProtocolError("Vision candle is outside its requested closed range")
                 prior = rows.get(opened)
                 if prior is not None and prior.candle != candle:
                     raise ProtocolError("conflicting verified Vision candle")

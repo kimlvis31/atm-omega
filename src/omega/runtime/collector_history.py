@@ -147,13 +147,24 @@ class HistoryWorker:
             self.aux[market] = BinanceAuxiliaryClient(market, client)
         self.vision = VisionArchive(root / "vision-history", paced=True, stop_requested=stop.is_set)
         self.vision_market = {
-            market: VisionMarketData(rest, self.vision) for market, rest in self.rest.items()
+            market: VisionMarketData(rest, self.vision, on_unaligned_bar=self._unaligned_bar)
+            for market, rest in self.rest.items()
         }
         self.raw = FileRawArchive(root / "history-repair-raw")
         self.origins = None
         self.repair_budget = RequestBudget((Window("repair", 120, 60),))
         self.auxiliary_history = DailyAuxiliaryHistory(
             root, self.vision, self.aux, clock_ms=clock_ms, stop=stop
+        )
+
+    @staticmethod
+    def _unaligned_bar(instrument, opening, closing, source_row):
+        log(
+            "kline_archive_noncanonical",
+            instrument=instrument.key,
+            open_ms=opening,
+            close_ms=closing,
+            source_row=source_row,
         )
 
     def check_origins(self, db):

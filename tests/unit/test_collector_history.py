@@ -6,9 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from omega.domain.errors import ProtocolError, StorageError
+from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
+from omega.infrastructure.binance.vision_market import VisionMarketData
 from omega.runtime.collect_aux_live import LiveAuxiliary
 from omega.runtime.collector_aux_history import (
     DAY,
@@ -195,3 +196,43 @@ def test_failed_archive_listing_does_not_record_source_absence(tmp_path, monkeyp
     assert history.step(None, None, INSTRUMENT, "depth", start) is False
     assert probes[1][3:] == ("vision", start, end, "unlisted", now)
     assert history.progress[INSTRUMENT.key + "|depth"]["state"] == "waiting_archive"
+
+
+def test_backfill_keeps_valid_archive_bars_around_noncanonical_source_minute():
+    start = DAY
+    end = start + 3 * MINUTE
+
+    @dataclass
+    class Receipt:
+        received_at_ms: int = end + 1
+
+    rows = []
+    for index in range(3):
+        opening = start + index * MINUTE
+        close = opening + (0 if index == 1 else MINUTE - 1)
+        values = (str(opening), "1", "1", "1", "1", "0", str(close), *("0",) * 5)
+        rows.append(
+            SimpleNamespace(
+                timestamp_ms=opening,
+                values=values,
+                receipt=Receipt(),
+                row_number=index + 1,
+            )
+        )
+    rest = SimpleNamespace(
+        market=INSTRUMENT.market,
+        client=SimpleNamespace(clock_ms=lambda: end + 2),
+        raw_archive=None,
+        prefix="/fapi/v1",
+    )
+    vision = SimpleNamespace(
+        iter_rows=lambda *_: iter(rows),
+        files=lambda *_: (SimpleNamespace(day_start_ms=start),),
+    )
+    with pytest.raises(ValidationError, match="aligned one-minute candle"):
+        VisionMarketData(rest, vision).closed_observations(INSTRUMENT, start, end, now_ms=end)
+    rejected = []
+    subject = VisionMarketData(rest, vision, on_unaligned_bar=lambda *args: rejected.append(args))
+    saved = subject.closed_observations(INSTRUMENT, start, end, now_ms=end)
+    assert [value.candle.open_time_ms for value in saved] == [start, start + 2 * MINUTE]
+    assert rejected == [(INSTRUMENT, start + MINUTE, start + MINUTE + 1, 2)]
