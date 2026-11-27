@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 
-from omega.domain.errors import ProtocolError, TradingBlocked, ValidationError
+from omega.domain.errors import BrokerRejected, ProtocolError, TradingBlocked, ValidationError
 from omega.domain.models import Candle, Instrument, Market, OrderKind, OrderRequest, decimal
 from omega.infrastructure.binance.client import BinanceClient
 from omega.infrastructure.binance.parsing import closed_candles
@@ -189,6 +189,53 @@ class BinanceMarketData:
             return int(payload["serverTime"])
         except (KeyError, TypeError, ValueError):
             raise ProtocolError("server clock unavailable") from None
+
+    def first_available_minute(self, instrument, *, trades=False):
+        self._check(instrument)
+        now = self.server_time()
+        endpoint = "/aggTrades" if trades else "/klines"
+        parameters = {"symbol": instrument.symbol, "startTime": 0, "limit": 1}
+        if not trades:
+            parameters["interval"] = "1m"
+
+        def first(start):
+            return self.client.request(
+                "GET",
+                self.prefix + endpoint,
+                {**parameters, "startTime": start},
+                weight=20 if trades else 2,
+            )
+
+        try:
+            rows = first(0)
+        except BrokerRejected as error:
+            if not trades or error.status != 400 or error.code not in {-4161, -4166, -1127}:
+                raise
+            # The provider rejects expired start times. Find its accepted lower bound.
+            lower, upper = 0, now // 60000 * 60000
+            while upper - lower > 60000:
+                middle = (lower + upper) // 120000 * 60000
+                try:
+                    first(middle)
+                except BrokerRejected as rejected:
+                    if rejected.status != 400 or rejected.code not in {-4161, -4166, -1127}:
+                        raise
+                    lower = middle + 60000
+                else:
+                    upper = middle
+            rows = first(upper)
+
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ProtocolError("provider did not supply a first available observation")
+        if trades:
+            stamp = rows[0].get("T") if isinstance(rows[0], dict) else None
+            if type(stamp) is not int or not 0 <= stamp < now:
+                raise ProtocolError("invalid first trade observation")
+            return stamp // 60000 * 60000
+        candles = closed_candles(instrument, rows, 0, now // 60000 * 60000, now)
+        if len(candles) != 1:
+            raise ProtocolError("provider did not supply a first closed minute")
+        return candles[0].open_time_ms
 
     def closed_minutes(
         self,

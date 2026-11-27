@@ -215,3 +215,20 @@ def test_invalid_weights_cannot_disable_admission(cost):
     with pytest.raises(ValidationError):
         budget.reserve({"ip": cost})
     budget.reserve({"ip": 1})
+
+
+def test_threads_on_one_budget_do_not_emit_spurious_lock_throttle(tmp_path):
+    path = tmp_path / "combined-public.json"
+    budget = SharedRequestBudget(path, clock=lambda: 120)
+    barrier = threading.Barrier(2)
+
+    def reserve_market():
+        barrier.wait(timeout=2)
+        for _ in range(10):
+            budget.reserve({"binance-ip": 1})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tasks = [pool.submit(reserve_market) for _ in range(2)]
+        for task in tasks:
+            task.result(timeout=5)
+    assert json.loads(path.read_text())["used"] == [["binance-ip", 60, 2, 20]]

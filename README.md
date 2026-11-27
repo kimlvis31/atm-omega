@@ -536,3 +536,68 @@ collection --help
 
 Keep the printed action ID. If a response is unconfirmed, query that ID rather
 than submitting another operation. These commands never connect trading accounts.
+
+### Base bars and staged history
+
+The same `omega-collect` executable handles live collection and the `bars`
+subcommands. For collection from both markets, pass
+`--subscription spot:BTCUSDT --subscription usdm:BTCUSDT`.
+
+Each `series_id` binds an instrument, feed, native bar interval, trading calendar,
+and effective UTC time. The collector selects the shortest interval declared by
+that feed, including one-minute bars when available. Times are UTC milliseconds.
+
+- Back up the database before updating and run the matching `omega-db migrate`
+  to prepare schema version 5.
+- `omega-collect bars copy-legacy --instrument binance:usdm:BTCUSDT --effective-from-ms MS --start-ms MS --end-ms MS`
+  copies up to 4,096 minutes per window to a separate series and compares prices,
+  volumes, source, receipt times, and raw data. A window can be rerun.
+  `verify-legacy` with the same arguments checks the current source again.
+- `omega-collect bars import FILE.json` accepts a `series` definition and up to
+  256 ordered `bars`. Each bar supplies `open_ms`, `close_ms`, `received_at_ms`,
+  `source`, and the five OHLCV values as decimal strings. Raw fields are optional.
+- `omega-collect bars check-transition --previous-series-id ID --target-series-id ID --as-of-ms MS`
+  checks the transition boundary and the final previous bar and first target
+  bar at the given receipt cutoff. Exit 0 confirms both bars, and exit 2 means
+  one or both are still pending.
+
+A sample five-minute import file
+
+```json
+{
+  "series": {
+    "version": 1, "instrument": "sample:cash_equity:DEMO", "feed": "sample",
+    "native_intervals_ms": [300000], "interval_ms": 300000,
+    "sessions": [[360000, 660000]], "receipt_grace_ms": 0,
+    "calendar_version": "example-1", "effective_from_ms": 360000
+  },
+  "bars": [
+    {"open_ms": 360000, "close_ms": 660000, "received_at_ms": 660010,
+     "source": "rest", "open": "100", "high": "102", "low": "99", "close": "101", "volume": "1.25"}
+  ]
+}
+```
+
+Select `--series-effective-from-ms MS` on `omega-collect` to store live Binance
+one-minute bars in this format. Reuse the same effective time when restarting.
+The collector resumes at the earliest missing minute. With the local API
+enabled, its startup message reports each instrument's `series_id`.
+`omega-collect bars serve --port PORT --token-file FILE` serves stored series.
+
+Collectors using different database configuration files can share the same
+`--request-budget-file PATH` for REST admission and cooldown. Live base-bar
+collection gives the websocket five seconds after a bar closes before
+repairing a missing bar through REST. REST cooldowns leave the websocket
+connected. Logs include REST response status and Binance's reported
+one-minute request weight.
+
+- `GET /api/collector/v2/bar-series?series_id=ID` returns the immutable definition.
+  Page through trading sessions with `session_offset` and `session_limit`.
+- `GET /api/collector/v2/bar-stream?series_id=ID&next_ms=MS&as_of_ms=MS` returns
+  contiguous committed bars. Persist `next_ms` after processing the returned
+  bars. Retry that timestamp when waiting for a gap, use the next session
+  opening returned with `session_closed`, and treat `calendar_unavailable` as
+  the end of known calendar coverage.
+- `GET /api/collector/v2/bar-aggregate` takes `series_id`, `start_ms`, `end_ms`,
+  `interval_ms`, and `as_of_ms`. It returns complete rolled-up bars from a single
+  trading session and reports missing and pending openings separately.

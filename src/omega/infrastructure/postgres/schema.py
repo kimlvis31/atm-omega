@@ -5,7 +5,13 @@ from importlib.resources import files
 
 from omega.domain.errors import StorageError
 
-MIGRATIONS = {1: "001_market.sql", 2: "002_raw_provenance.sql", 3: "003_auxiliary_minutes.sql"}
+MIGRATIONS = {
+    1: "001_market.sql",
+    2: "002_raw_provenance.sql",
+    3: "003_auxiliary_minutes.sql",
+    4: "004_vision_provenance.sql",
+    5: "005_bar_series.sql",
+}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 

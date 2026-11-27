@@ -389,3 +389,65 @@ Linux에서는 `run.bat` 대신 `bash run.sh`를 사용하며 설치 명령은 `
 - **차트·구조 뷰:** PSAR 짧은 수평선과 선택 봉 시점까지 확정된 SWING pivot을 표시합니다. NN 3D 요약은 기록된 연결과 step만 사용합니다. 모든 뉴런·가중치 tensor를 렌더링하는 뷰는 아닙니다.
 
 설정·터미널/API 사용법과 각 한도는 [설정 설명서](./config/README.md)를 참고하세요.
+
+### 종목별 기준봉과 이력 이식
+
+실시간 수집과 `bars` 하위 명령은 같은 `omega-collect` 실행본에서 사용합니다.
+`--subscription spot:BTCUSDT --subscription usdm:BTCUSDT`을 넘기면 같은 심볼의
+현물과 선물을 한 프로세스에서 각각 수집합니다.
+
+수집기는 종목·공급 경로·기준봉 주기·거래 세션·적용 시작 시각을 묶어
+`series_id`를 만듭니다. 공급 경로의 지원 주기 중 가장 짧은 주기를 쓰므로,
+1분봉을 받을 수 있으면 1분봉을 기준으로 삼습니다. 세션 경계는 UTC 밀리초입니다.
+
+- 업데이트 전 DB를 백업하고 새 버전의 `omega-db migrate`로 붙임 스키마를 준비합니다.
+  버전 5 스키마와 맞는 실행본을 사용하세요.
+- `omega-collect bars copy-legacy --instrument binance:usdm:BTCUSDT --effective-from-ms MS --start-ms MS --end-ms MS`는
+  기존 1분봉을 별도 계열로 복사하고 가격·수량·원래 출처·수신 기록·원문을 대조합니다.
+  한 번에 최대 4,096분을 처리합니다. 같은 범위로 다시 실행할 수 있습니다.
+  `verify-legacy`에 같은 인수를 주면 현재 원본과 다시 대조합니다.
+- `omega-collect bars import FILE.json`은 `series` 정의와 `bars` 목록을 한 번에 저장합니다.
+  봉의 시간은 `open_ms`, `close_ms`, `received_at_ms`로, OHLCV는 문자열로, 출처는
+  `source`로 지정합니다. `raw`, `raw_source`, `raw_received_at_ms`는 선택 항목입니다.
+  최대 256개 봉을 봉 시작 시각 순으로 넣습니다.
+- `omega-collect bars check-transition --previous-series-id ID --target-series-id ID --as-of-ms MS`는
+  경계가 이전 봉을 자르지 않는지 확인하고, 지정한 수신 시각까지 이전 마지막 봉과 새 첫 봉이
+  저장되었는지 검사합니다. 두 봉이 준비되면 코드 0, 데이터 대기 중이면 코드 2를 반환합니다.
+
+5분봉 입력 파일 예시입니다.
+
+```json
+{
+  "series": {
+    "version": 1, "instrument": "sample:cash_equity:DEMO", "feed": "sample",
+    "native_intervals_ms": [300000], "interval_ms": 300000,
+    "sessions": [[360000, 660000]], "receipt_grace_ms": 0,
+    "calendar_version": "example-1", "effective_from_ms": 360000
+  },
+  "bars": [
+    {"open_ms": 360000, "close_ms": 660000, "received_at_ms": 660010,
+     "source": "rest", "open": "100", "high": "102", "low": "99", "close": "101", "volume": "1.25"}
+  ]
+}
+```
+
+Binance 공개 1분봉을 이 저장소에 직접 모으려면 `omega-collect` 또는
+`run.bat collect`에서 `--lookback-minutes` 대신 `--series-effective-from-ms MS`를
+지정합니다. 재시작할 때 같은 적용 시작 시각을 넘기면 가장 먼저 빠진 봉부터 복구합니다.
+인증된 로컬 API를 함께 켜면 준비 메시지에서 종목별 `series_id`를 확인할 수 있습니다.
+저장된 계열만 제공하려면 `omega-collect bars serve --port PORT --token-file FILE`을 사용합니다.
+
+여러 수집기가 DB 설정 파일을 따로 쓸 때는 같은 `--request-budget-file PATH`를 넘겨
+REST 요청 예산과 대기 시간을 공유할 수 있습니다. 기준봉 실시간 수집은 새 확정 봉을
+웹소켓으로 먼저 받고, 마감 후 5초가 지난 결측을 REST로 보완합니다. REST가 제한되면
+요청을 쉬는 동안에도 웹소켓은 이어집니다. 수집 로그는 REST 응답 상태와 Binance가
+보낸 분당 요청 가중치를 기록합니다.
+
+- `GET /api/collector/v2/bar-series?series_id=ID`는 거래 세션과 기준봉 정의를 제공합니다.
+  `session_offset`과 `session_limit`으로 세션 목록을 나누어 읽을 수 있습니다.
+- `GET /api/collector/v2/bar-stream?series_id=ID&next_ms=MS&as_of_ms=MS`는 확정된
+  연속 봉을 제공합니다. 읽은 봉의 처리가 끝난 뒤에만 반환된 `next_ms`를 저장하세요.
+  결측이면 같은 시각에서 다시 요청하고, `session_closed`면 반환된 다음 세션 시작점으로
+  이동합니다. `calendar_unavailable`은 등록한 달력 범위가 끝났거나 해당 시각을 덮지 않음을 뜻합니다.
+- `GET /api/collector/v2/bar-aggregate`는 `series_id`, `start_ms`, `end_ms`, `interval_ms`, `as_of_ms`로
+  한 거래 세션 안의 완성된 상위 봉만 반환합니다. 수신 기한이 지난 결측과 아직 마감되지 않은 봉을 구분합니다.

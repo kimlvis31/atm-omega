@@ -13,6 +13,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 
 from omega.domain.errors import RateLimited, StorageError
 from omega.infrastructure.atomic_files import replace_atomic
@@ -34,6 +35,7 @@ class SharedRequestBudget(RequestBudget):
         self.path = Path(path)
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self.wall_clock = clock
+        self._thread_lock = Lock()
         self._active_now = 0.0
         super().__init__(windows, clock=lambda: self._active_now)
 
@@ -168,7 +170,7 @@ class SharedRequestBudget(RequestBudget):
                 temporary.unlink(missing_ok=True)
 
     def _apply(self, method, *args):
-        with self._locked():
+        with self._thread_lock, self._locked():
             real_now = self._load()
             try:
                 result = method(*args)

@@ -14,6 +14,10 @@ EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 CANDLE_COLUMNS = "open_time,close_time,o,h,l,c,v"
 
 
+class DatabaseUnavailable(StorageError):
+    """The persistence connection or transaction can be attempted again."""
+
+
 def connect_database(settings: DatabaseSettings):
     try:
         import psycopg
@@ -33,7 +37,7 @@ def connect_database(settings: DatabaseSettings):
             "-c idle_in_transaction_session_timeout=10000",
         )
     except psycopg.Error:
-        raise StorageError("database connection failed") from None
+        raise DatabaseUnavailable("database connection failed") from None
 
 
 def candle_from_row(instrument: Instrument, row) -> Candle:
@@ -97,10 +101,35 @@ class PostgresCandleStore:
         except self._database_error:
             raise StorageError("database observation query failed") from None
 
+    def observations(self, instrument, start_ms, end_ms):
+        if (
+            type(start_ms) is not int
+            or type(end_ms) is not int
+            or not 0 <= start_ms < end_ms
+            or end_ms - start_ms > 20000 * 60000
+        ):
+            raise ValidationError("bounded candle cache window required")
+        try:
+            rows = self.connection.execute(
+                f"SELECT {CANDLE_COLUMNS},source,received_ms,raw,raw_source,raw_received_ms "
+                "FROM market.candles_1m WHERE instrument=%s AND open_time>=%s AND open_time<%s "
+                "ORDER BY open_time LIMIT 20001",
+                (
+                    instrument.key,
+                    EPOCH + timedelta(milliseconds=start_ms),
+                    EPOCH + timedelta(milliseconds=end_ms),
+                ),
+            ).fetchall()
+            return tuple(
+                MinuteObservation(candle_from_row(instrument, row[:7]), *row[7:]) for row in rows
+            )
+        except self._database_error:
+            raise StorageError("database candle cache query failed") from None
+
     def put(self, observation: MinuteObservation) -> bool:
         # [1]: Observation Validation
         c = observation.candle
-        if observation.source not in {"rest", "websocket"}:
+        if observation.source not in {"rest", "websocket", "vision"}:
             raise ValidationError("unknown market observation source")
         if (
             type(observation.received_at_ms) is not int
@@ -117,7 +146,7 @@ class PostgresCandleStore:
         if observation.raw is None and raw_source is not None:
             raise ValidationError("raw reception metadata requires a payload")
         if raw_source is not None and (
-            raw_source not in {"rest", "websocket"}
+            raw_source not in {"rest", "websocket", "vision"}
             or type(raw_received) is not int
             or raw_received < 0
         ):

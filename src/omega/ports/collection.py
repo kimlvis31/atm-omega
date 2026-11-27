@@ -43,7 +43,9 @@ class MinuteObservationHistory(Protocol):
         ...
 
 
-def accept_rest_observations(rows, instrument, start_ms, end_ms, received_at_ms):
+def accept_rest_observations(
+    rows, instrument, start_ms, end_ms, received_at_ms, *, require_raw=True
+):
     """Validate optional captured rows and resample only canonical acceptance time."""
     if (
         type(rows) is not tuple
@@ -69,22 +71,28 @@ def accept_rest_observations(rows, instrument, start_ms, end_ms, received_at_ms)
             or type(row.candle.close_time_ms) is not int
             or not row.candle.close_time_ms <= end_ms
             or type(row.source) is not str
-            or row.source != "rest"
-            or type(row.raw_source) is not str
-            or row.raw_source != "rest"
-            or type(row.raw) is not str
-            or not row.raw
-            or type(row.raw_received_at_ms) is not int
+            or row.source not in {"rest", "vision"}
             or type(row.received_at_ms) is not int
-            or not 0 <= row.raw_received_at_ms <= row.received_at_ms <= received_at_ms
-            or row.received_at_ms < row.candle.close_time_ms
+            or not row.candle.close_time_ms <= row.received_at_ms <= received_at_ms
         ):
             raise ProtocolError("captured REST observation or original receipt is invalid")
-        try:
-            raw_bytes = row.raw.encode("utf-8")
-        except UnicodeError:
-            raise ProtocolError("captured REST row is not exact UTF-8 text") from None
-        if len(raw_bytes) > 65_536:
-            raise ProtocolError("captured REST row exceeds its byte limit")
+        if row.raw is None:
+            if require_raw or row.raw_source is not None or row.raw_received_at_ms is not None:
+                raise ProtocolError("captured history raw provenance is incomplete")
+        else:
+            if (
+                type(row.raw) is not str
+                or not row.raw
+                or row.raw_source != row.source
+                or type(row.raw_received_at_ms) is not int
+                or not 0 <= row.raw_received_at_ms <= row.received_at_ms
+            ):
+                raise ProtocolError("captured history raw provenance is invalid")
+            try:
+                raw_bytes = row.raw.encode("utf-8")
+            except UnicodeError:
+                raise ProtocolError("captured history row is not exact UTF-8 text") from None
+            if len(raw_bytes) > 65_536:
+                raise ProtocolError("captured history row exceeds its byte limit")
         result.append(replace(row, received_at_ms=received_at_ms))
     return tuple(result)

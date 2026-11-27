@@ -1,5 +1,6 @@
 """Read-only committed Omega candles. No exchange client or ingestion writes."""
 
+import re
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -7,16 +8,20 @@ from pathlib import Path
 from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.infrastructure.candles import EPOCH, candle_from_row
 from omega.infrastructure.market_data import instrument_key
-from omega.infrastructure.postgres.config import load_database_settings
+from omega.infrastructure.postgres.config import database_destination_id, load_database_settings
 from omega.infrastructure.postgres.schema import verify_schema
+from omega.ports.collection import MinuteObservation
 
 
 class CommittedCandleSource:
-    def __init__(self, root: Path, *, connect=None):
+    def __init__(self, root: Path, *, connect=None, config_path: Path | None = None):
         self.root, self.connect = Path(root), connect
+        self.config_path = (
+            Path(config_path) if config_path is not None else self.root / "database.config.toml"
+        )
 
     def _connect(self):
-        settings = load_database_settings(self.root / "database.config.toml")
+        settings = load_database_settings(self.config_path)
         return self._connect_settings(settings)
 
     def _connect_settings(self, settings):
@@ -49,6 +54,16 @@ class CommittedCandleSource:
             raise StorageError("paper feed database connection unavailable") from None
 
     def read(self, keys, start_ms, end_ms, *, limit=4096, as_of_ms=None):
+        return tuple(
+            observation.candle
+            for observation in self.read_observations(
+                keys, start_ms, end_ms, limit=limit, as_of_ms=as_of_ms
+            )
+        )
+
+    def read_observations(
+        self, keys, start_ms, end_ms, *, limit=4096, as_of_ms=None, destination_id=None
+    ):
         if (
             not keys
             or len(keys) > 100
@@ -63,10 +78,21 @@ class CommittedCandleSource:
             or not 1 <= limit <= 4096
             or as_of_ms is not None
             and (type(as_of_ms) is not int or not 0 <= as_of_ms <= 253_402_300_799_000)
+            or destination_id is not None
+            and (
+                type(destination_id) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", destination_id) is None
+            )
         ):
             raise ValidationError("invalid bounded committed candle query")
         instruments = {key: instrument_key(key) for key in keys}
-        connection = self._connect()
+        if destination_id is None:
+            connection = self._connect()
+        else:
+            settings = load_database_settings(self.config_path)
+            if database_destination_id(settings) != destination_id:
+                raise ValidationError("committed candle database destination mismatch")
+            connection = self._connect_settings(settings)
         try:
             verify_schema(connection)
             cutoff = "" if as_of_ms is None else " AND received_ms<=%s"
@@ -85,22 +111,22 @@ class CommittedCandleSource:
             ).fetchall()
             if len(rows) > limit:
                 raise StorageError("committed candle query exceeds bounded feed capacity")
-            candles = []
+            observations = []
             for key, *values in rows:
                 if key not in instruments:
                     raise ProtocolError("feed query returned an unsubscribed instrument")
                 candle = candle_from_row(instruments[key], values[:7])
                 if (
                     not start_ms <= candle.open_time_ms < end_ms
-                    or values[7] not in {"rest", "websocket"}
+                    or values[7] not in {"rest", "websocket", "vision"}
                     or type(values[8]) is not int
                     or values[8] < candle.close_time_ms
                     or as_of_ms is not None
                     and values[8] > as_of_ms
                 ):
                     raise ProtocolError("feed requires a valid committed real observation")
-                candles.append(candle)
-            return tuple(candles)
+                observations.append(MinuteObservation(candle, values[7], values[8]))
+            return tuple(observations)
         finally:
             connection.close()
 

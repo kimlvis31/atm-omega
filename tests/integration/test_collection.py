@@ -9,7 +9,8 @@ from omega.analysis.moving_averages import (
 )
 from omega.application.collection import MinuteCollector
 from omega.application.strategies import StrategyRunner
-from omega.domain.errors import ProtocolError
+from omega.domain.bar_schedule import BarSchedule
+from omega.domain.errors import ProtocolError, RateLimited, ValidationError
 from omega.domain.models import Candle, Instrument, Market, decimal
 from omega.domain.safety import BlockReason, EntryGate
 from omega.domain.trading import BudgetView, ExecutionConstraints, PositionView, TradeContext
@@ -318,6 +319,9 @@ def test_stop_waits_for_owned_history_thread_without_publishing_its_late_result(
         async def __aexit__(self, *args):
             self.closed = True
 
+        async def recv(self):
+            await asyncio.Event().wait()
+
     async def scenario():
         socket = Socket()
         collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
@@ -343,3 +347,249 @@ def test_stop_waits_for_owned_history_thread_without_publishing_its_late_result(
         asyncio.run(scenario())
     finally:
         release.set()
+
+
+def test_stream_receives_while_history_is_blocked_and_commits_in_order(store):
+    import json
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    received = []
+    accepted = asyncio.Event()
+
+    class BlockingHistory:
+        def closed_minutes(self, *_args, **_kwargs):
+            entered.set()
+            assert release.wait(3)
+            return (bar(0), bar(1))
+
+    class Socket:
+        closed = False
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            self.closed = True
+
+        async def recv(self):
+            self.calls += 1
+            if self.calls == 1:
+                return json.dumps(
+                    {
+                        "stream": "btcusdt@kline_1m",
+                        "data": {
+                            "e": "kline",
+                            "E": 180000,
+                            "s": "BTCUSDT",
+                            "k": {
+                                "t": 120000,
+                                "T": 179999,
+                                "s": "BTCUSDT",
+                                "i": "1m",
+                                "o": "100",
+                                "h": "100",
+                                "l": "100",
+                                "c": "100",
+                                "v": "1",
+                                "x": True,
+                            },
+                        },
+                    }
+                )
+            accepted.set()
+            await asyncio.Event().wait()
+
+    async def scenario():
+        socket = Socket()
+        collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
+        worker = CollectionWorker(
+            StreamPlan(Market.USDM, (INSTRUMENT,)),
+            BlockingHistory(),
+            collector,
+            clock_ms=lambda: 180001,
+            connect=lambda _plan: socket,
+        )
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run(stop))
+        assert await asyncio.to_thread(entered.wait, 1)
+        await asyncio.wait_for(accepted.wait(), 1)
+        assert received == [] and collector.cursor[INSTRUMENT] == 0
+        release.set()
+        for _ in range(100):
+            if len(received) == 3:
+                break
+            await asyncio.sleep(0.005)
+        assert received == [bar(0), bar(1), bar(2)]
+        stop.set()
+        await asyncio.wait_for(task, 1)
+        assert socket.closed and worker._repair_task is None
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+
+
+def test_bar_schedule_validates_minute_intervals_and_finite_sessions():
+    continuous = BarSchedule()
+    unresolved = BarSchedule(sessions=())
+    assert continuous.coverage_known(60_000)
+    assert continuous.contains_open(60_000)
+    assert continuous.next_expected(60_000) == 120_000
+    assert continuous.contiguous_missing_range(60_000, 180_000) == (60_000, 180_000)
+    assert not unresolved.coverage_known(60_000)
+    assert unresolved.aligned_start(60_000) is None
+    assert not unresolved.contains_open(60_000)
+    assert unresolved.next_expected(60_000) is None
+    assert unresolved.contiguous_missing_range(60_000, 180_000) is None
+
+    with pytest.raises(ValidationError, match="whole-minute"):
+        BarSchedule(90_000)
+    with pytest.raises(ValidationError, match="ordered"):
+        BarSchedule(60_000, ((0, 120_000), (60_000, 180_000)))
+
+    schedule = BarSchedule(
+        300_000, ((300_000, 900_000), (1_500_000, 1_800_000), (2_100_000, 2_400_000))
+    )
+    assert schedule.aligned_start(599_999) == 300_000
+    offset_schedule = BarSchedule(300_000, ((360_000, 960_000),), receipt_grace_ms=20_000)
+    assert offset_schedule.aligned_start(629_999) == 360_000
+    assert offset_schedule.contiguous_missing_range(360_000, 679_999) is None
+    assert offset_schedule.contiguous_missing_range(360_000, 680_000) == (360_000, 660_000)
+    assert offset_schedule.contiguous_missing_range(660_000, 1_260_000, chunk=1) == (
+        660_000,
+        960_000,
+    )
+    assert schedule.next_expected(600_000) == 1_500_000
+    assert schedule.next_expected(1_500_000) == 2_100_000
+    assert schedule.next_expected(2_100_000) is None
+    assert schedule.contiguous_missing_range(600_000, 1_700_000) == (600_000, 900_000)
+    assert schedule.contiguous_missing_range(1_800_000, 2_000_000) is None
+    assert schedule.coverage_known(1_200_000)
+    assert schedule.coverage_known(2_400_000)
+    assert not schedule.contains_open(1_200_000)
+    assert schedule.aligned_start(1_200_000) is None
+    assert not schedule.contains_open(2_400_000)
+    assert not schedule.coverage_known(2_400_001)
+
+    adjacent = BarSchedule(300_000, ((360_000, 660_000), (660_000, 960_000)))
+    assert adjacent.next_expected(360_000) == 660_000
+    assert adjacent.aligned_start(660_000) == 660_000
+    assert adjacent.contains_open(660_000)
+
+
+def test_collector_applies_per_instrument_schedule_and_receipt_grace(store):
+    schedule = BarSchedule(60_000, ((0, 180_000), (300_000, 480_000)), 20_000)
+    collector = MinuteCollector(
+        {INSTRUMENT: 0}, store, lambda _c: None, schedules={INSTRUMENT: schedule}
+    )
+    collector.connected = True
+    candle = Candle(INSTRUMENT, 0, 60_000, *(decimal("100") for _ in range(4)), decimal("1"))
+    too_early = MinuteObservation(candle, "websocket", 79_999)
+    with pytest.raises(ProtocolError, match="future"):
+        collector.accept(too_early, now_ms=59_999)
+    accepted = MinuteObservation(candle, "websocket", 60_000)
+    assert collector.accept(accepted, now_ms=100_000) == 1
+    assert collector.cursor[INSTRUMENT] == 60_000
+    assert collector.missing_range(INSTRUMENT, 240_000) == (60_000, 180_000)
+    assert collector.ready(INSTRUMENT, 60_000)
+    for minute in (1, 2):
+        candle = bar(minute)
+        observation = MinuteObservation(candle, "websocket", candle.close_time_ms)
+        assert collector.accept(observation, now_ms=candle.close_time_ms) == 1
+    assert collector.cursor[INSTRUMENT] == 300_000
+    closed_bar = MinuteObservation(bar(3), "websocket", 240_000)
+    with pytest.raises(ProtocolError, match="schedule"):
+        collector.accept(closed_bar, now_ms=240_000)
+    assert store.get(INSTRUMENT, 180_000) is None
+    assert not collector.ready(INSTRUMENT, 480_001)
+
+    resumed = MinuteCollector(
+        {INSTRUMENT: 480_000}, store, lambda _c: None, schedules={INSTRUMENT: schedule}
+    )
+    resumed.connected = True
+    assert resumed.missing_range(INSTRUMENT, 480_000) is None
+    assert resumed.ready(INSTRUMENT, 480_000)
+    assert not resumed.ready(INSTRUMENT, 480_001)
+    assert resumed.accept(obs(0), now_ms=480_000) == 0
+    with pytest.raises(ValidationError, match="collection start"):
+        MinuteCollector(
+            {INSTRUMENT: 180_000}, store, lambda _c: None, schedules={INSTRUMENT: schedule}
+        )
+
+
+def test_native_repair_waits_for_websocket_and_keeps_committed_candle(store):
+    received = []
+    now = [60_001]
+    collector = MinuteCollector({INSTRUMENT: 0}, store, received.append)
+    history = History([bar(0, "99"), bar(1, "101")])
+    worker = CollectionWorker(
+        StreamPlan(Market.USDM, (INSTRUMENT,)),
+        history,
+        collector,
+        clock_ms=lambda: now[0],
+        repair_grace_ms=5_000,
+    )
+    asyncio.run(worker.repair())
+    assert history.calls == []
+    # A previous live session committed this candle, but the worker still needs
+    # to advance its in-memory cursor from the original stored value.
+    store.put(obs(0))
+    now[0] = 125_000
+    asyncio.run(worker.repair())
+    assert history.calls == [(0, 120_000)]
+    assert received == [bar(0), bar(1, "101")]
+    assert store.get(INSTRUMENT, 0) == bar(0)
+    assert collector.cursor[INSTRUMENT] == 120_000
+
+
+def test_native_rest_throttle_leaves_live_socket_connected(store):
+    async def scenario():
+        pause = asyncio.Event()
+        stop = asyncio.Event()
+        closed = False
+        delays = []
+
+        class Socket:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                nonlocal closed
+                closed = True
+
+            async def recv(self):
+                await asyncio.Event().wait()
+
+        class Limited:
+            def closed_minutes(self, *_args, **_kwargs):
+                raise RateLimited(12)
+
+        def throttled(seconds):
+            delays.append(seconds)
+            pause.set()
+
+        collector = MinuteCollector({INSTRUMENT: 0}, store, lambda _: None)
+        worker = CollectionWorker(
+            StreamPlan(Market.USDM, (INSTRUMENT,)),
+            Limited(),
+            collector,
+            connect=lambda _: Socket(),
+            clock_ms=lambda: 120_000,
+            repair_grace_ms=5_000,
+            on_rest_throttle=throttled,
+        )
+        task = asyncio.create_task(worker.run(stop))
+        try:
+            await asyncio.wait_for(pause.wait(), timeout=2)
+            assert collector.connected and not closed
+            assert delays == [12]
+            assert worker._next_repair - worker.monotonic() > 11
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, timeout=2)
+        assert closed
+
+    asyncio.run(scenario())

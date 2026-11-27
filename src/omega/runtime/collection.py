@@ -43,6 +43,8 @@ class CollectionWorker:
         repair_interval_seconds: float = 5,
         monotonic: Callable[[], float] = time.monotonic,
         capture_rest_raw: bool = False,
+        repair_grace_ms: int = 0,
+        on_rest_throttle: Callable[[float], None] | None = None,
         on_protection=None,
         protection_generation=None,
         on_protection_state=None,
@@ -53,6 +55,8 @@ class CollectionWorker:
             raise ValidationError("invalid collection deadlines")
         if not 0 < repair_interval_seconds <= 60:
             raise ValidationError("invalid repair interval")
+        if type(repair_grace_ms) is not int or not 0 <= repair_grace_ms < 60_000:
+            raise ValidationError("invalid REST repair grace")
         if (
             type(capture_rest_raw) is not bool
             or capture_rest_raw
@@ -75,23 +79,31 @@ class CollectionWorker:
         self._protection_counts = {"coalesced": 0, "capacity": 0, "expired": 0, "cleared": 0}
 
         self.capture_rest_raw = capture_rest_raw
+        self.repair_grace_ms = repair_grace_ms
+        self.on_rest_throttle = on_rest_throttle
         self.plan, self.history, self.collector = plan, history, collector
         self.connect, self.clock_ms = connect, clock_ms
         self.idle_seconds, self.session_seconds = idle_seconds, session_seconds
         self.on_health = on_health
         self.repair_interval_seconds, self.monotonic = repair_interval_seconds, monotonic
         self._next_repair = 0.0
+        self._repair_task = None
 
     async def repair(self) -> None:
         """A page at a time off the event loop; a real missing row remains a gap."""
         self._next_repair = self.monotonic() + self.repair_interval_seconds
         now = self.clock_ms()
+        repair_until = max(0, now - self.repair_grace_ms)
+        repair_options = {"missing_only": True} if self.repair_grace_ms else {}
         for instrument in self.plan.instruments:
-            while request := self.collector.missing_range(instrument, now):
+            while request := self.collector.missing_range(instrument, repair_until):
                 start, end = request
+                typed_history = self.capture_rest_raw or getattr(
+                    self.history, "native_observations", False
+                )
                 fetch_history = (
                     self.history.closed_observations
-                    if self.capture_rest_raw
+                    if typed_history
                     else self.history.closed_minutes
                 )
                 fetch = asyncio.create_task(
@@ -103,16 +115,26 @@ class CollectionWorker:
                     # Cancelling a to_thread await doesn't stop its HTTP thread.
                     # Reap this owned read before the caller closes the store;
                     # its late result must not publish after the stop request.
+                    while not fetch.done():
+                        try:
+                            await asyncio.shield(fetch)
+                        except asyncio.CancelledError:
+                            continue
+                    # Retrieving the late outcome never publishes it.
                     await asyncio.gather(fetch, return_exceptions=True)
                     raise
-                if self.capture_rest_raw:
+                if typed_history:
                     accepted_at = self.clock_ms()
                     observations = accept_rest_observations(
-                        rows, instrument, start, end, accepted_at
+                        rows, instrument, start, end, accepted_at, require_raw=self.capture_rest_raw
                     )
                     before = self.collector.cursor[instrument]
-                    for observation in sorted(observations, key=lambda o: o.candle.open_time_ms):
-                        self.collector.accept(observation, now_ms=accepted_at)
+                    for index, observation in enumerate(
+                        sorted(observations, key=lambda o: o.candle.open_time_ms)
+                    ):
+                        self.collector.accept(observation, now_ms=accepted_at, **repair_options)
+                        if index % 16 == 15:
+                            await asyncio.sleep(0)
                 else:
                     for candle in rows:
                         if (
@@ -121,14 +143,28 @@ class CollectionWorker:
                         ):
                             raise ProtocolError("history returned an out-of-range minute")
                     before = self.collector.cursor[instrument]
-                    for candle in sorted(rows, key=lambda c: c.open_time_ms):
-                        self.collector.accept(MinuteObservation(candle, "rest", now), now_ms=now)
+                    accepted_at = self.clock_ms() if self.repair_grace_ms else now
+                    for index, candle in enumerate(sorted(rows, key=lambda c: c.open_time_ms)):
+                        self.collector.accept(
+                            MinuteObservation(candle, "rest", accepted_at),
+                            now_ms=accepted_at,
+                            **repair_options,
+                        )
+                        if index % 16 == 15:
+                            await asyncio.sleep(0)
                 if self.collector.cursor[instrument] == before:
                     break  # No zero-filling or spinning on an absent minute.
         self.collector.repaired()
 
     def health(self, reason: str) -> None:
-        ready = all(self.collector.ready(i, self.clock_ms()) for i in self.plan.instruments)
+        now_ms = self.clock_ms()
+        ready = all(self.collector.ready(i, now_ms) for i in self.plan.instruments)
+        if not ready and reason in {"gap", "stale"}:
+            coverage = [self.collector.coverage_state(i, now_ms) for i in self.plan.instruments]
+            if any(not known for known, _due in coverage) and not any(
+                due for _known, due in coverage
+            ):
+                reason = "calendar_unavailable"
         self.on_health(ready, "ready" if ready else reason)
 
     def protection_pending_status(self):
@@ -257,6 +293,10 @@ class CollectionWorker:
             )
         return max(0.001, min(delays))
 
+    def _start_repair(self):
+        if self._repair_task is None and self.monotonic() >= self._next_repair:
+            self._repair_task = asyncio.create_task(self.repair())
+
     async def _protection_stream(self, socket):
         """One owned recv task; timer wakes do not renew the socket idle deadline."""
         receiver = None
@@ -271,9 +311,31 @@ class CollectionWorker:
                 self._drain_protection()
                 if receiver is None:
                     receiver = asyncio.create_task(receive())
+                tasks = {receiver}
+                if self._repair_task is not None:
+                    tasks.add(self._repair_task)
                 done, _ = await asyncio.wait(
-                    {receiver}, timeout=self._protection_timeout(idle_deadline)
+                    tasks,
+                    timeout=self._protection_timeout(idle_deadline),
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                if self._repair_task in done:
+                    repair = self._repair_task
+                    self._repair_task = None
+                    try:
+                        await repair
+                    except RateLimited as error:
+                        if not self.repair_grace_ms:
+                            raise
+                        delay = max(1.0, error.retry_after or 1.0)
+                        self._next_repair = max(self._next_repair, self.monotonic() + delay)
+                        if self.on_rest_throttle is not None:
+                            self.on_rest_throttle(delay)
+                        self.health("rate_limited")
+                    else:
+                        self.health("gap")
+                    if receiver not in done:
+                        continue
                 if not done:
                     self._drain_protection()
                     if self.monotonic() < idle_deadline:
@@ -287,8 +349,7 @@ class CollectionWorker:
                         if not isinstance(outcome, asyncio.CancelledError):
                             raise outcome
                         self.health("stale")
-                        if self.monotonic() >= self._next_repair:
-                            await self.repair()
+                        self._start_repair()
                         self.health("gap")
                         idle_deadline = self.monotonic() + self.idle_seconds
                         continue
@@ -301,8 +362,7 @@ class CollectionWorker:
                     self.collector.missing_range(i, self.clock_ms()) for i in self.plan.instruments
                 ):
                     self.health("gap")
-                    if self.monotonic() >= self._next_repair:
-                        await self.repair()
+                    self._start_repair()
                 self.health("gap")
         finally:
             if receiver is not None:
@@ -357,34 +417,22 @@ class CollectionWorker:
                     if self.on_protection_state is not None:
                         self.on_protection_state(self._protection_connection, True)
                     self.on_protection(None)
-                await self.repair()
+                self._start_repair()
                 self.health("gap")
                 async with asyncio.timeout(self.session_seconds):
-                    if self.on_protection is not None:
-                        await self._protection_stream(socket)
-                    else:
-                        while True:
-                            try:
-                                raw = await asyncio.wait_for(
-                                    socket.recv(), timeout=self.idle_seconds
-                                )
-                            except TimeoutError:
-                                # Healthy socket traffic is not evidence every symbol is current.
-                                self.health("stale")
-                                if self.monotonic() >= self._next_repair:
-                                    await self.repair()
-                                self.health("gap")
-                                continue
-                            await self.accept_stream(raw, received_at_ms=self.clock_ms())
-                            if any(
-                                self.collector.missing_range(i, self.clock_ms())
-                                for i in self.plan.instruments
-                            ):
-                                self.health("gap")
-                                if self.monotonic() >= self._next_repair:
-                                    await self.repair()
-                            self.health("gap")
+                    await self._protection_stream(socket)
         finally:
+            if self._repair_task is not None:
+                self._repair_task.cancel()
+                while not self._repair_task.done():
+                    try:
+                        await asyncio.shield(self._repair_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                await asyncio.gather(self._repair_task, return_exceptions=True)
+                self._repair_task = None
             self.collector.connected = False
             self._clear_protection_pending()
             if self.on_protection is not None:
@@ -402,7 +450,9 @@ class CollectionWorker:
             task, stopped = asyncio.create_task(self.session()), asyncio.create_task(stop.wait())
             try:
                 done, _ = await asyncio.wait({task, stopped}, return_when=asyncio.FIRST_COMPLETED)
-                if stopped in done:
+                # Observe a finished session before honoring a concurrent stop;
+                # cancellation must not acknowledge an already-failed commit.
+                if stopped in done and (not task.done() or task.cancelled()):
                     return
                 try:
                     await task
@@ -414,6 +464,8 @@ class CollectionWorker:
                     delay = min(60.0, 2**failures) + random.uniform(0, 1)
                 else:
                     delay = 1.0
+                if stopped in done:
+                    return
             finally:
                 for pending in (task, stopped):
                     pending.cancel()

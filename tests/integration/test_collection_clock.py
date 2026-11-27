@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from omega.application.collection import MinuteCollector
+from omega.domain.bar_schedule import BarSchedule
 from omega.domain.errors import ProtocolError, TransportError
-from omega.domain.models import Instrument, Market
+from omega.domain.models import Candle, Instrument, Market, decimal
 from omega.infrastructure.binance.streams import StreamPlan
 from omega.runtime import collection
 
@@ -123,3 +124,78 @@ def test_stop_interrupts_early_frame_wait_and_no_future_row_is_saved():
         assert socket.closed and not store.rows and not instance.collector.connected
 
     asyncio.run(scenario())
+
+
+def test_repair_only_requests_due_bars_from_resolved_trading_sessions():
+    minute = 60_000
+    grace = 2_000
+    next_open = OPEN + 3 * minute
+    following_open = next_open + 3 * minute
+    next_close = next_open + minute
+    schedule = BarSchedule(
+        minute,
+        ((OPEN, CLOSE), (next_open, next_close), (following_open, following_open + minute)),
+        receipt_grace_ms=grace,
+    )
+
+    def bar(opened):
+        price = decimal("100")
+        return Candle(INSTRUMENT, opened, opened + minute, price, price, price, price, price)
+
+    first, second = bar(OPEN), bar(next_open)
+    rows, requests = [first], []
+
+    class AvailableHistory:
+        def closed_minutes(self, instrument, begin, end, *, now_ms):
+            assert instrument == INSTRUMENT and end <= now_ms
+            requests.append((begin, end))
+            return tuple(row for row in rows if begin <= row.open_time_ms < end)
+
+    store, received, reports = Store(), [], []
+    collector = MinuteCollector(
+        {INSTRUMENT: OPEN}, store, received.append, schedules={INSTRUMENT: schedule}
+    )
+    collector.connected = True
+    now = [CLOSE + grace - 1]
+    instance = collection.CollectionWorker(
+        StreamPlan(Market.USDM, (INSTRUMENT,)),
+        AvailableHistory(),
+        collector,
+        clock_ms=lambda: now[0],
+        on_health=lambda ready, reason: reports.append((ready, reason)),
+    )
+
+    asyncio.run(instance.repair())
+    assert requests == []
+    now[0] += 1
+    asyncio.run(instance.repair())
+    assert requests == [(OPEN, CLOSE)]
+    assert collector.cursor[INSTRUMENT] == next_open
+    assert collector.ready(INSTRUMENT, now[0])
+
+    now[0] = next_close + grace
+    asyncio.run(instance.repair())
+    assert requests[-1] == (next_open, next_close)
+    assert collector.cursor[INSTRUMENT] == next_open
+    assert not collector.ready(INSTRUMENT, now[0])
+    instance.health("gap")
+    assert reports[-1] == (False, "gap")
+
+    rows.append(second)
+    asyncio.run(instance.repair())
+    assert requests == [(OPEN, CLOSE), (next_open, next_close), (next_open, next_close)]
+    assert received == [first, second]
+    assert collector.cursor[INSTRUMENT] == following_open
+    assert collector.ready(INSTRUMENT, now[0])
+
+    now[0] = following_open + minute + grace
+    instance.health("gap")
+    assert reports[-1] == (False, "gap")
+
+    rows.append(bar(following_open))
+    asyncio.run(instance.repair())
+    assert collector.missing_range(INSTRUMENT, now[0]) is None
+    instance.health("gap")
+    assert reports[-1] == (False, "calendar_unavailable")
+    instance.health("rate_limited")
+    assert reports[-1] == (False, "rate_limited")

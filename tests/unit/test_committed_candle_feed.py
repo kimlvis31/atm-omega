@@ -10,7 +10,8 @@ import pytest
 from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.infrastructure import candle_feed as module
 from omega.infrastructure.candles import EPOCH
-from omega.infrastructure.postgres.config import DatabaseSettings
+from omega.infrastructure.postgres.config import DatabaseSettings, database_destination_id
+from omega.ports.collection import MinuteObservation
 
 KEY = "binance:spot:BTCUSDT"
 
@@ -54,6 +55,21 @@ def test_checksum_is_verified_before_only_bounded_read_and_connection_always_clo
     assert calls == [connection] and connection.closed
     assert rows[0].open_time_ms == 0 and rows[0].instrument.key == KEY
     assert connection.queries[0][1][-1] == 4097
+
+
+def test_read_observations_preserves_committed_source_and_received_time(tmp_path, monkeypatch):
+    connection = Connection([row("websocket", 63000)])
+    adapter = module.CommittedCandleSource(tmp_path)
+    monkeypatch.setattr(adapter, "_connect", lambda: connection)
+    monkeypatch.setattr(module, "verify_schema", lambda _: None)
+
+    observations = adapter.read_observations([KEY], 0, 60000)
+
+    assert observations == (MinuteObservation(observations[0].candle, "websocket", 63000),)
+    assert observations[0].raw is None
+    assert observations[0].raw_source is None
+    assert observations[0].raw_received_at_ms is None
+    assert connection.closed
 
 
 @pytest.mark.parametrize("source,received", [("synthetic", 60000), ("rest", 1), ("rest", True)])
@@ -137,3 +153,50 @@ def test_invalid_cutoff_is_rejected_before_connecting(tmp_path, monkeypatch, cut
     monkeypatch.setattr(source, "_connect", lambda: pytest.fail("invalid cutoff reached DB"))
     with pytest.raises(ValidationError):
         source.read([KEY], 0, 60000, as_of_ms=cutoff)
+
+
+def test_destination_fence_uses_same_loaded_settings_before_connection(tmp_path, monkeypatch):
+    source = module.CommittedCandleSource(tmp_path)
+    connection = Connection([row()])
+    settings = DatabaseSettings("127.0.0.1", 55432, "omega", "reader", "secret")
+    loaded, connected = [], []
+    monkeypatch.setattr(
+        module,
+        "load_database_settings",
+        lambda _path: loaded.append(settings) or settings,
+    )
+    monkeypatch.setattr(
+        source,
+        "_connect_settings",
+        lambda selected: connected.append(selected) or connection,
+    )
+    monkeypatch.setattr(module, "verify_schema", lambda _: None)
+
+    observations = source.read_observations(
+        [KEY], 0, 60_000, destination_id=database_destination_id(settings)
+    )
+
+    assert len(observations) == 1
+    assert loaded == [settings] and connected == [settings]
+    assert connection.closed
+
+
+def test_destination_mismatch_or_bad_digest_is_rejected_before_connect(tmp_path, monkeypatch):
+    source = module.CommittedCandleSource(tmp_path)
+    settings = DatabaseSettings("127.0.0.1", 55432, "omega", "reader", "secret")
+    monkeypatch.setattr(module, "load_database_settings", lambda _path: settings)
+    monkeypatch.setattr(
+        source,
+        "_connect_settings",
+        lambda _settings: pytest.fail("destination mismatch reached database connect"),
+    )
+    with pytest.raises(ValidationError, match="destination mismatch"):
+        source.read_observations([KEY], 0, 60_000, destination_id="0" * 64)
+
+    monkeypatch.setattr(
+        module,
+        "load_database_settings",
+        lambda _path: pytest.fail("malformed destination should be rejected before config load"),
+    )
+    with pytest.raises(ValidationError, match="invalid bounded"):
+        source.read_observations([KEY], 0, 60_000, destination_id="A" * 64)

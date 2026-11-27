@@ -166,14 +166,25 @@ def test_rejection_does_not_expose_provider_echoed_credentials():
     assert "test-secret" not in str(error.value)
 
 
-def test_rate_limit_cooldown_shared_by_clients():
-    transport = Transport(HttpResponse(429, b'{"code":-1003}', {"Retry-After": "30"}))
-    c = client(transport)
-    with pytest.raises(RateLimited):
-        c.request("GET", "/api/v3/time")
-    with pytest.raises(RateLimited):
-        c.request("GET", "/api/v3/time")
-    assert len(transport.requests) == 1
+@pytest.mark.parametrize("status", [429, 418])
+def test_rate_limit_cooldown_shared_by_clients(status):
+    now = [120.0]
+    budget = RequestBudget((Window("binance-ip", 600, 60),), clock=lambda: now[0])
+    spot_transport = Transport(HttpResponse(status, b"<html>limited</html>", {"Retry-After": "30"}))
+    futures_transport = Transport({"serverTime": 150_000})
+    spot = BinanceClient("https://api.binance.com", spot_transport, budget=budget)
+    futures = BinanceClient("https://fapi.binance.com", futures_transport, budget=budget)
+
+    with pytest.raises(RateLimited) as provider:
+        spot.request("GET", "/api/v3/time")
+    assert provider.value.retry_after == 30
+    now[0] = 149
+    with pytest.raises(RateLimited) as local:
+        futures.request("GET", "/fapi/v1/time")
+    assert local.value.retry_after == 1
+    assert len(spot_transport.requests) == 1 and futures_transport.requests == []
+    now[0] = 150
+    assert futures.request("GET", "/fapi/v1/time") == {"serverTime": 150_000}
 
 
 @pytest.mark.parametrize("market", [Market.SPOT, Market.USDM])
