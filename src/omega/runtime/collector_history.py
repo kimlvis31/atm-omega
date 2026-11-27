@@ -38,6 +38,7 @@ from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import verify_schema
 from omega.infrastructure.raw_archive import FileRawArchive
 from omega.ports.raw_data import PublicRawResponse
+from omega.runtime.collect_cli import _CollectionTransport
 from omega.runtime.collector_aux_history import DailyAuxiliaryHistory
 from omega.runtime.control import InstanceLock
 from omega.runtime.settings import atomic_json
@@ -132,7 +133,7 @@ class HistoryWorker:
         for market in {instrument.market for instrument in inventory}:
             client = BinanceClient(
                 "https://api.binance.com" if market == Market.SPOT else "https://fapi.binance.com",
-                UrllibTransport(),
+                _CollectionTransport(UrllibTransport(), market),
                 budget=budget,
             )
             self.rest[market] = BinanceMarketData(market, client)

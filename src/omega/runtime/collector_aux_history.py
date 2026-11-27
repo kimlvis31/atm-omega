@@ -6,8 +6,8 @@ from itertools import groupby
 
 from omega.application.trade_flow import trade_flow_values
 from omega.domain.errors import ProtocolError, StorageError
-from omega.domain.market_inputs import AuxiliaryInput
-from omega.infrastructure.binance.auxiliary import agg_trade
+from omega.domain.market_inputs import AuxiliaryInput, TradeFlowEvent
+from omega.domain.models import decimal
 from omega.infrastructure.binance.vision import DAY
 from omega.runtime.settings import atomic_json
 
@@ -26,20 +26,18 @@ ARCHIVE_FIELDS = {
 
 def trade_provenance(row):
     values = row.values
-    return agg_trade(
-        row.instrument,
-        {
-            "a": int(values[0]),
-            "p": values[1],
-            "q": values[2],
-            "f": int(values[3]),
-            "l": int(values[4]),
-            "T": row.timestamp_ms,
-            "m": values[6].lower() in {"true", "1"},
-        },
+    return TradeFlowEvent(
+        instrument=row.instrument,
+        aggregate_id=int(values[0]),
+        first_trade_id=int(values[3]),
+        last_trade_id=int(values[4]),
+        price=decimal(values[1]),
+        quantity=decimal(values[2]),
+        buyer_is_maker=values[6].lower() in {"true", "1"},
+        trade_time_ms=row.timestamp_ms,
         available_at_ms=row.receipt.received_at_ms,
-        source="vision",
-    ).as_flow_event()
+        source=row.instrument.key + ":aggTrade",
+    )
 
 
 def depth_fields(rows):

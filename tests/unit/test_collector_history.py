@@ -7,7 +7,7 @@ import pytest
 
 from omega.domain.errors import ProtocolError
 from omega.domain.models import Instrument, Market
-from omega.runtime.collector_aux_history import depth_fields
+from omega.runtime.collector_aux_history import depth_fields, trade_provenance
 from omega.runtime.collector_history import HistoryWorker, discover
 
 INSTRUMENT = Instrument("binance", Market.USDM, "BTCUSDT")
@@ -66,3 +66,18 @@ def test_archive_depth_conserves_each_native_side_in_eta_bands():
 def test_non_monotonic_archive_depth_is_not_stored_as_valid():
     with pytest.raises(ProtocolError):
         depth_fields((Depth(("unused", "1", "1", "100")), Depth(("unused", "2", "1", "90"))))
+
+
+def test_archive_trade_uses_native_flow_contract_and_actual_receipt():
+    trade = trade_provenance(
+        SimpleNamespace(
+            instrument=INSTRUMENT,
+            timestamp_ms=120001,
+            values=("7", "12.50", "0.2", "20", "21", "120001", "true"),
+            receipt=SimpleNamespace(received_at_ms=500000),
+        )
+    )
+    assert trade.source == INSTRUMENT.key + ":aggTrade"
+    assert trade.available_at_ms == 500000
+    assert trade.trade_time_ms == 120001
+    assert trade.buyer_is_maker and trade.trade_count == 2 and trade.quantity == Decimal("0.2")
