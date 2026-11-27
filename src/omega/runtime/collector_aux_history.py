@@ -8,6 +8,7 @@ from omega.application.trade_flow import trade_flow_values
 from omega.domain.errors import ProtocolError, StorageError
 from omega.domain.market_inputs import AuxiliaryInput, TradeFlowEvent
 from omega.domain.models import decimal
+from omega.infrastructure.auxiliary_store import AUXILIARY_HISTORY_BATCH_SIZE
 from omega.infrastructure.binance.vision import DAY
 from omega.runtime.settings import atomic_json
 
@@ -109,40 +110,7 @@ class DailyAuxiliaryHistory:
         ).fetchall()
         return max(row[0] for row in values) if len(values) == len(sources) else None
 
-    def _write(self, store, instrument, observation):
-        previous = store.get(
-            instrument,
-            observation.channel,
-            observation.source,
-            observation.window_start_ms,
-            as_of_ms=self.clock_ms(),
-        )
-        if previous is not None:
-            # Trading views retain the original availability and exact prior revision.
-            if previous.observation.quality == "observed" or observation.quality != "observed":
-                return False
-            if previous.observation.available_at_ms >= observation.available_at_ms:
-                return False
-        try:
-            receipt = store.put(
-                instrument,
-                observation,
-                expected_previous=None if previous is None else previous.checksum,
-            )
-            return receipt.inserted
-        except ProtocolError:
-            latest = store.get(
-                instrument,
-                observation.channel,
-                observation.source,
-                observation.window_start_ms,
-                as_of_ms=self.clock_ms(),
-            )
-            if latest is not None and latest.observation.quality == "observed":
-                return False
-            raise
-
-    def _trade_day(self, db, store, instrument, start, end):
+    def _trade_day(self, db, instrument, start, end):
         checkpoint = db.execute(
             """SELECT historical_series_id,next_ms,end_ms,mirror_ms
                FROM market.binance_kline_history WHERE instrument=%s""",
@@ -161,7 +129,7 @@ class DailyAuxiliaryHistory:
                 (series, start, end),
             ).fetchall()
         )
-        written, complete, seen = 0, 0, set()
+        observations, complete, seen = [], 0, set()
         rows = self.vision.iter_rows(instrument, "agg_trade", start, end)
         for opening, group in groupby(rows, key=lambda row: row.timestamp_ms // MINUTE * MINUTE):
             if self.stop.is_set():
@@ -180,9 +148,7 @@ class DailyAuxiliaryHistory:
             )
             values["AGGTRADE_VISION_ARCHIVE"] = 1
             complete += int(proven)
-            written += self._write(
-                store,
-                instrument,
+            observations.append(
                 AuxiliaryInput(
                     "trade_flow",
                     tuple(values.items()),
@@ -201,9 +167,7 @@ class DailyAuxiliaryHistory:
             if opening in seen or volume != 0:
                 continue
             values = (*trade_flow_values(()), ("AGGTRADE_KLINE_ZERO", 1))
-            written += self._write(
-                store,
-                instrument,
+            observations.append(
                 AuxiliaryInput(
                     "trade_flow",
                     values,
@@ -217,10 +181,10 @@ class DailyAuxiliaryHistory:
                 ),
             )
             complete += 1
-        return written, complete
+        return observations, complete
 
-    def _depth_day(self, store, instrument, start, end):
-        written, complete = 0, 0
+    def _depth_day(self, instrument, start, end):
+        observations, complete = [], 0
         rows = self.vision.iter_rows(instrument, "depth", start, end)
         for opening, group in groupby(rows, key=lambda row: row.timestamp_ms // MINUTE * MINUTE):
             if self.stop.is_set():
@@ -236,9 +200,7 @@ class DailyAuxiliaryHistory:
             fields["DEPTH_VISION_REBINNED"] = 1
             full = coverage == 1
             complete += int(full)
-            written += self._write(
-                store,
-                instrument,
+            observations.append(
                 AuxiliaryInput(
                     "depth",
                     tuple(fields.items()),
@@ -251,7 +213,7 @@ class DailyAuxiliaryHistory:
                     instrument.key + ":" + DEPTH_SOURCE,
                 ),
             )
-        return written, complete
+        return observations, complete
 
     @staticmethod
     def _metric_input(instrument, channel, stamp, values, available):
@@ -266,8 +228,8 @@ class DailyAuxiliaryHistory:
             source=instrument.key + ":" + suffix,
         )
 
-    def _metric_day(self, store, instrument, start, end, from_archive):
-        written = 0
+    def _metric_day(self, instrument, start, end, from_archive):
+        observations = []
         matched = {"open_interest": set(), "long_short_ratio": set()}
         if from_archive:
             for row in self.vision.iter_rows(instrument, "metrics", start, end):
@@ -283,9 +245,7 @@ class DailyAuxiliaryHistory:
                     values = tuple((field, Decimal(columns[name])) for field, name in fields)
                     if any(not value.is_finite() or value < 0 for _, value in values):
                         continue
-                    written += self._write(
-                        store,
-                        instrument,
+                    observations.append(
                         self._metric_input(
                             instrument,
                             channel,
@@ -316,9 +276,7 @@ class DailyAuxiliaryHistory:
                         raise InterruptedError
                     if row.event_time_ms % PERIOD:
                         raise ProtocolError("unaligned Binance statistic")
-                    written += self._write(
-                        store,
-                        instrument,
+                    observations.append(
                         self._metric_input(
                             instrument,
                             channel,
@@ -328,7 +286,7 @@ class DailyAuxiliaryHistory:
                         ),
                     )
                     matched[channel].add(row.event_time_ms)
-        return written, len(matched["open_interest"] & matched["long_short_ratio"])
+        return observations, len(matched["open_interest"] & matched["long_short_ratio"])
 
     def step(self, db, store, instrument, channel, first):
         now = self.clock_ms()
@@ -359,16 +317,23 @@ class DailyAuxiliaryHistory:
             self._save()
             return False
         if channel == "metrics" and (archive or from_rest):
-            result = self._metric_day(store, instrument, start, end, bool(archive))
+            result = self._metric_day(instrument, start, end, bool(archive))
         elif archive and channel == "depth":
-            result = self._depth_day(store, instrument, start, end)
+            result = self._depth_day(instrument, start, end)
         elif archive:
-            result = self._trade_day(db, store, instrument, start, end)
+            result = self._trade_day(db, instrument, start, end)
         else:
-            result = (0, 0)
+            result = ([], 0)
         if result is None:
             return False
-        written, verified = result
+        observations, verified = result
+        written = 0
+        # Keep the day checkpoint behind all committed chunks. A retry retains committed rows.
+        for offset in range(0, len(observations), AUXILIARY_HISTORY_BATCH_SIZE):
+            if self.stop.is_set():
+                raise InterruptedError
+            batch = observations[offset : offset + AUXILIARY_HISTORY_BATCH_SIZE]
+            written += store.put_history_batch(instrument, batch)
         unresolved = max(0, (end - start) // interval - verified)
         if unresolved:
             path = (

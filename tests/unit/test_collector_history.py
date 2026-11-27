@@ -5,9 +5,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from omega.domain.errors import ProtocolError
+from omega.domain.errors import ProtocolError, StorageError
 from omega.domain.models import Instrument, Market
-from omega.runtime.collector_aux_history import depth_fields, trade_provenance
+from omega.infrastructure.auxiliary_store import AUXILIARY_HISTORY_BATCH_SIZE
+from omega.runtime.collector_aux_history import (
+    DAY,
+    MINUTE,
+    DailyAuxiliaryHistory,
+    depth_fields,
+    trade_provenance,
+)
 from omega.runtime.collector_history import HistoryWorker, discover
 
 INSTRUMENT = Instrument("binance", Market.USDM, "BTCUSDT")
@@ -81,3 +88,47 @@ def test_archive_trade_uses_native_flow_contract_and_actual_receipt():
     assert trade.available_at_ms == 500000
     assert trade.trade_time_ms == 120001
     assert trade.buyer_is_maker and trade.trade_count == 2 and trade.quantity == Decimal("0.2")
+
+
+def test_history_checkpoint_only_advances_after_every_batch_commits(tmp_path, monkeypatch):
+    limit = AUXILIARY_HISTORY_BATCH_SIZE
+    start = DAY
+    end = start + (limit + 1) * MINUTE
+    rows = list(range(limit + 1))
+    key = INSTRUMENT.key + "|depth"
+    vision = SimpleNamespace(files=lambda *_: ["archive"])
+
+    def now():
+        return end + 2 * DAY
+
+    monkeypatch.setattr(DailyAuxiliaryHistory, "_end", staticmethod(lambda *_: end))
+    monkeypatch.setattr(DailyAuxiliaryHistory, "_depth_day", lambda *_: (rows, len(rows)))
+
+    class Store:
+        fail = True
+        committed = set()
+        batch_sizes = []
+
+        def put_history_batch(self, instrument, batch):
+            assert instrument == INSTRUMENT
+            self.batch_sizes.append(len(batch))
+            if len(batch) == 1 and self.fail:
+                raise StorageError("history batch commit failed")
+            inserted = len(set(batch) - self.committed)
+            self.committed.update(batch)
+            return inserted
+
+    store = Store()
+    history = DailyAuxiliaryHistory(tmp_path, vision, {}, clock_ms=now, stop=Event())
+    with pytest.raises(StorageError):
+        history.step(None, store, INSTRUMENT, "depth", start)
+    assert store.committed == set(rows[:limit])
+
+    resumed = DailyAuxiliaryHistory(tmp_path, vision, {}, clock_ms=now, stop=Event())
+    assert resumed.progress[key]["next_ms"] == start
+    store.fail = False
+    result = resumed.step(None, store, INSTRUMENT, "depth", start)
+    assert result["written"] == 1
+    assert result["verified"] == len(rows)
+    assert resumed.progress[key]["next_ms"] == end
+    assert store.batch_sizes == [limit, 1, limit, 1]

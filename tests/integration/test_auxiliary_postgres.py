@@ -286,6 +286,51 @@ def test_statement_failure_rolls_back_insert_and_same_connection_can_retry(store
     assert store.put(instrument, value).revision == 1
 
 
+def test_archive_batch_rolls_back_and_only_repairs_older_incomplete_rows(store, instrument):
+    partial = observation(quality="partial", coverage=Decimal("0.5"))
+    observed = observation(channel="depth")
+    new = observation(channel="open_interest")
+    repair = replace(
+        partial,
+        quality="observed",
+        coverage=Decimal(1),
+        available_at_ms=partial.available_at_ms + 10,
+    )
+    changed = replace(
+        observed, values=(("DEPTH_BIDS0", 7),), available_at_ms=observed.available_at_ms + 10
+    )
+    store.put(instrument, partial)
+    store.put(instrument, observed)
+    original_connection = store.connection
+
+    class FailingInsert:
+        def execute(self, sql, parameters=None):
+            result = original_connection.execute(sql, parameters)
+            if "INSERT INTO market.auxiliary_minutes" in sql:
+                original_connection.execute("SELECT 1/0")
+            return result
+
+        def __getattr__(self, name):
+            return getattr(original_connection, name)
+
+    store.connection = FailingInsert()
+    try:
+        with pytest.raises(StorageError):
+            store.put_history_batch(instrument, [new, repair, changed])
+    finally:
+        store.connection = original_connection
+
+    assert read(store, instrument, new) is None
+    assert read(store, instrument, repair).revision == 1
+    assert store.put_history_batch(instrument, [new, repair, changed]) == 2
+    assert read(store, instrument, new).revision == 1
+    assert read(store, instrument, repair, partial.available_at_ms).observation == partial
+    repaired = read(store, instrument, repair)
+    assert repaired.revision == 2 and repaired.observation == repair
+    assert read(store, instrument, changed).observation == observed
+    assert store.put_history_batch(instrument, [new, repair, changed]) == 0
+
+
 def test_commit_acknowledgement_loss_retry_is_a_decoded_equal_duplicate(store, instrument):
     import psycopg
 
