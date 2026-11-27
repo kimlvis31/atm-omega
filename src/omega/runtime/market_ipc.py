@@ -23,9 +23,22 @@ from omega.infrastructure.candles import DatabaseUnavailable
 from omega.runtime.control import InstanceLock
 
 MAX_FRAME = 16 * 1024 * 1024
+
+
+class BackfillPaused(TransportError):
+    pass
+
+
 ERRORS = {
     error.__name__: error
-    for error in (ProtocolError, StorageError, TransportError, ValidationError, DatabaseUnavailable)
+    for error in (
+        ProtocolError,
+        StorageError,
+        TransportError,
+        ValidationError,
+        DatabaseUnavailable,
+        BackfillPaused,
+    )
 }
 
 

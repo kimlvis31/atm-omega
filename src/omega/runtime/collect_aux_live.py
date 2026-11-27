@@ -140,7 +140,7 @@ class LiveAuxiliary:
             raise
 
     async def write(self, instrument, observation):
-        await self.pending.put((instrument, observation))
+        await self.pending.put((asyncio.get_running_loop().time(), instrument, observation))
 
     async def _commit(self, batch, stop):
         delay = 0.25
@@ -177,10 +177,11 @@ class LiveAuxiliary:
         loop = asyncio.get_running_loop()
         pending = await self.pending.get()
         while pending is not None:
+            deadline = pending[0] + 1.0
             batch, keys = [], set()
-            deadline = loop.time() + 0.2
-            while pending is not None:
-                instrument, observation = pending
+            stopping = False
+            while len(batch) < AUXILIARY_BATCH_SIZE:
+                _, instrument, observation = pending
                 key = (
                     instrument,
                     observation.channel,
@@ -188,28 +189,28 @@ class LiveAuxiliary:
                     observation.window_start_ms,
                 )
                 if key in keys:
-                    break
+                    break  # Revisions of the same minute commit in arrival order.
                 keys.add(key)
-                batch.append(pending)
+                batch.append((instrument, observation))
+                pending = None
                 if len(batch) == AUXILIARY_BATCH_SIZE:
-                    pending = None
                     break
                 try:
                     pending = self.pending.get_nowait()
                 except asyncio.QueueEmpty:
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        pending = None
+                    if loop.time() >= deadline:
                         break
                     try:
-                        pending = await asyncio.wait_for(self.pending.get(), timeout=remaining)
+                        async with asyncio.timeout_at(deadline):
+                            pending = await self.pending.get()
                     except TimeoutError:
-                        pending = None
                         break
                 if pending is None:
-                    await self._commit(batch, stop)
-                    return  # Stop sentinel arrived after the last admitted observation.
+                    stopping = True
+                    break
             await self._commit(batch, stop)
+            if stopping:
+                return
             if pending is None:
                 pending = await self.pending.get()
 

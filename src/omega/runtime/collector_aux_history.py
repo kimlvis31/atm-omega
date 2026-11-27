@@ -15,6 +15,7 @@ from omega.infrastructure.collector_coverage import (
     first_covered,
     note_source_check,
 )
+from omega.runtime.collector_write_queue import run_write
 from omega.runtime.settings import atomic_json
 
 MINUTE = 60_000
@@ -247,8 +248,9 @@ class HistoricalAuxiliaryFetch:
 
 
 class DailyAuxiliaryHistory:
-    def __init__(self, root, vision, clients, *, clock_ms, stop, fetch=None):
+    def __init__(self, root, vision, clients, *, clock_ms, stop, fetch=None, write=run_write):
         self.root, self.remote = root, fetch is not None
+        self.write = write
         self.fetch = fetch or HistoricalAuxiliaryFetch(
             vision, clients, clock_ms=clock_ms, stop=stop
         )
@@ -433,7 +435,7 @@ class DailyAuxiliaryHistory:
             if self.stop.is_set():
                 raise InterruptedError
             batch = observations[offset : offset + AUXILIARY_BATCH_SIZE]
-            written += store.put_history_batch(instrument, batch)
+            written += self.write("history", store.put_history_batch, instrument, batch)
         unresolved = max(0, (end - start) // interval - verified)
         if archive and job.get("state") == "waiting_archive":
             clear_unlisted_check(db, instrument, channel, start, end)

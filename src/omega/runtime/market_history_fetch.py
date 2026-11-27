@@ -1,10 +1,10 @@
 """Binance history collection and normalization owned by the market data process."""
 
 from decimal import Decimal
-from threading import local
+from threading import BoundedSemaphore, Event, local
 
 from omega.application.trade_flow import trade_flow_values
-from omega.domain.errors import ProtocolError, ValidationError
+from omega.domain.errors import ProtocolError, TransportError, ValidationError
 from omega.domain.models import Market
 from omega.infrastructure.binance.auxiliary_client import BinanceAuxiliaryClient
 from omega.infrastructure.binance.budget import RequestBudget, Window
@@ -14,11 +14,12 @@ from omega.infrastructure.binance.shared_budget import SharedRequestBudget
 from omega.infrastructure.binance.transport import UrllibTransport
 from omega.infrastructure.binance.vision import DAY, VisionArchive
 from omega.infrastructure.binance.vision_market import VisionMarketData
+from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.raw_archive import FileRawArchive
 from omega.ports.raw_data import PublicRawResponse
 from omega.runtime.collector_aux_history import HistoricalAuxiliaryFetch
 from omega.runtime.collector_history import CHANNELS, MINUTE, clock_ms, discover, log
-from omega.runtime.market_ipc import MarketSocket
+from omega.runtime.market_ipc import BackfillPaused, MarketSocket
 from omega.runtime.market_wire import (
     auxiliary_document,
     auxiliary_from_document,
@@ -29,12 +30,14 @@ from omega.runtime.market_wire import (
 
 
 class MarketHistoryFetch:
-    def __init__(self, root, inventory, stop):
+    def __init__(self, root, inventory, stop, *, workers=12):
         self.root, self.inventory, self.stop = root, set(inventory), stop
         self.budget = SharedRequestBudget(root / "binance-public-budget.json")
         self.repair_budget = RequestBudget((Window("repair", 120, 60),))
         self.raw = FileRawArchive(root / "history-repair-raw")
         self.workers = local()
+        self.downloads = BoundedSemaphore(workers)
+        self.backfill_paused = Event()
         self.admission = VisionArchive(root / "vision-history")._budget
 
     def _worker(self):
@@ -119,8 +122,27 @@ class MarketHistoryFetch:
         )
 
     def dispatch(self, operation, args):
+        if operation == "backfill_pause":
+            paused = args["paused"]
+            if type(paused) is not bool:
+                raise ValidationError("invalid market backfill pause state")
+            if paused:
+                self.backfill_paused.set()
+            else:
+                self.backfill_paused.clear()
+            return paused
+        if operation == "repair_trade":
+            return self._fetch(operation, args)
+        with self.downloads:
+            if operation in {"klines", "aux_day"} and self.backfill_paused.is_set():
+                raise BackfillPaused()
+            return self._fetch(operation, args)
+
+    def _fetch(self, operation, args):
+        if self.stop.is_set():
+            raise TransportError("market collector is stopping")
         requested = instrument_key(args["instrument"])
-        if requested not in self.inventory or self.stop.is_set():
+        if requested not in self.inventory:
             raise ValidationError("market request is outside the active inventory")
         rest, auxiliary, vision, fetch = self._worker()
         if operation == "origin":
@@ -200,7 +222,7 @@ class MarketHistoryFetch:
                 if not amount.is_finite() or amount < 0 or stamp in volumes:
                     raise ValidationError("invalid trade reference volume")
                 volumes[stamp] = amount
-            if len(volumes) > 1440:
+            if len(volumes) > COMMIT_BATCH_ROWS:
                 raise ValidationError("trade reference window overflow")
             rows, _ = fetch.trade_day(requested, start, end, volumes)
         elif channel == "depth":
@@ -208,6 +230,8 @@ class MarketHistoryFetch:
         else:
             rows, _ = fetch.metric_day(requested, start, end, archive)
         unsaved = [row for row in rows if row.window_start_ms not in known]
+        if len(unsaved) > COMMIT_BATCH_ROWS:
+            raise ProtocolError("backfill reply exceeds the reserved rows")
         if channel == "metrics":
             coverage = [
                 {
@@ -226,6 +250,11 @@ class MarketHistoryFetch:
 class RemoteHistoryFetch:
     def __init__(self, path):
         self.connection = MarketSocket(path, response_timeout=600)
+        self.control = MarketSocket(path, response_timeout=3)
+
+    def set_backfill_paused(self, paused):
+        if self.control.call("backfill_pause", paused=paused) is not paused:
+            raise ProtocolError("market backfill pause acknowledgement disagrees")
 
     def origin(self, instrument, channel):
         return self.connection.call("origin", instrument=instrument.key, channel=channel)
@@ -236,6 +265,8 @@ class RemoteHistoryFetch:
         documents, archive = self.connection.call(
             "klines", instrument=instrument.key, start=start, end=end, windows=windows
         )
+        if len(documents) > COMMIT_BATCH_ROWS:
+            raise ProtocolError("backfill bar reply exceeds the reserved rows")
         rows = tuple(minute_from_document(row) for row in documents)
         allowed = {stamp for low, high in windows for stamp in range(low, high, MINUTE)}
         if any(
@@ -257,6 +288,8 @@ class RemoteHistoryFetch:
             allow_rest=allow_rest,
         )
         rows = []
+        if len(documents) > COMMIT_BATCH_ROWS:
+            raise ProtocolError("backfill auxiliary reply exceeds the reserved rows")
         for value in documents:
             owner, observation = auxiliary_from_document(value)
             if owner != instrument or not start <= observation.window_start_ms < end:

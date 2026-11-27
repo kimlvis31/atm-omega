@@ -42,7 +42,7 @@ services:
     command:
       - --collect-auxiliary
       - --fetch-workers
-      - '${OMEGA_VISION_WORKERS:-12}'
+      - '12'
       - --ipc-root
       - /run/omega
       - --request-budget-file
@@ -108,7 +108,7 @@ services:
       - --root
       - /run/omega
       - --fetch-workers
-      - '${OMEGA_VISION_WORKERS:-12}'
+      - '12'
       - --effective-from-ms
       - "${OMEGA_EFFECTIVE_FROM_MS:?Set the original series effective time}"
       - --api-port

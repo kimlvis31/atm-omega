@@ -188,10 +188,12 @@ async def collect(args) -> None:
             from omega.runtime.market_history_fetch import MarketHistoryFetch
             from omega.runtime.market_ipc import serve_market_socket
 
-            fetch = MarketHistoryFetch(ipc_root, instruments, stop)
+            fetch = MarketHistoryFetch(ipc_root, instruments, stop, workers=args.fetch_workers)
             socket_stack.enter_context(
                 serve_market_socket(
-                    ipc_root / "ipc" / "market.sock", fetch.dispatch, capacity=args.fetch_workers
+                    ipc_root / "ipc" / "market.sock",
+                    fetch.dispatch,
+                    capacity=args.fetch_workers + 2,
                 )
             )
         if getattr(args, "api_port", None) is not None:
@@ -268,7 +270,7 @@ async def collect(args) -> None:
                 {
                     "repair_grace_ms": 5_000,
                     "on_rest_throttle": rest_throttle,
-                    "stream_batch_seconds": 0.2,
+                    "stream_batch_seconds": 1.0,
                 }
                 if native_series is not None
                 else {}

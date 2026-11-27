@@ -16,12 +16,13 @@ from omega.infrastructure.candles import (
     DatabaseUnavailable,
     connect_database,
 )
+from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import DatabaseSettings
 from omega.infrastructure.postgres.schema import verify_schema
 
 OBSERVATION_COLUMNS = CANDLE_COLUMNS + ",source,received_ms,raw,raw_source,raw_received_ms"
 MAX_SERIES_PAGE = 4096
-BAR_WRITE_BATCH_SIZE = 256
+BAR_WRITE_BATCH_SIZE = COMMIT_BATCH_ROWS
 
 
 def series_observation(series, row) -> SeriesObservation:
@@ -145,7 +146,9 @@ class PostgresBarSeriesStore:
                 for left, right in zip(observations, observations[1:], strict=False)
             )
         ):
-            raise ValidationError("import requires 1..256 ordered observations of one series")
+            raise ValidationError(
+                f"import requires 1..{BAR_WRITE_BATCH_SIZE} ordered observations of one series"
+            )
         try:
             with self.connection.transaction():
                 self.register(series)

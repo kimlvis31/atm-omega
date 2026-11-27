@@ -62,8 +62,14 @@ The collector owns Binance REST, Vision, WebSocket subscriptions and observation
 aggregation. The data manager owns range planning, PostgreSQL writes, checkpoint
 updates and the committed read API. They exchange bounded frames over private
 Unix sockets in the shared runtime directory. A live ingest reply is sent after
-its DB transaction commits. The data manager submits up to OMEGA_VISION_WORKERS
-candle fetches at a time. Vision workers share the provider cooldown state.
+its DB transaction commits. Stream writes flush when the oldest buffered row
+reaches one second or when the batch reaches 1,440 rows. The database writer
+rotates among live bars, auxiliary records, repair and historical batches.
+
+Vision uses 12 download workers and shares the provider cooldown state. The
+data manager reserves one 1,440-row page per in-flight history fetch, up to 12
+pages. It pauses admission on the collector at 10 finished pages and resumes
+at six. Active fetches, stream ingestion and repair continue during the pause.
 
 When replacing an installation with the former history service, stop the old
 collector and history before starting collector and data_manager. The existing

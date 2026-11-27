@@ -15,6 +15,7 @@ from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Instrument
 from omega.infrastructure.auxiliary_codec import decode_observation, encode_observation
 from omega.infrastructure.candles import EPOCH, connect_database
+from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import database_destination_id
 from omega.infrastructure.postgres.schema import verify_schema
 from omega.ports.auxiliary import (
@@ -24,7 +25,7 @@ from omega.ports.auxiliary import (
 )
 
 # Constants
-AUXILIARY_BATCH_SIZE = 256
+AUXILIARY_BATCH_SIZE = COMMIT_BATCH_ROWS
 _COLUMNS = "revision,checksum,previous_checksum,payload,available_ms,event_ms"
 _KEY = "instrument=%s AND channel=%s AND dataset=%s AND open_time=%s"
 _MAX_TIME = 253_402_300_799_000

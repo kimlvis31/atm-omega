@@ -4,6 +4,7 @@ import argparse
 import signal
 import time
 from contextlib import closing
+from itertools import batched
 from pathlib import Path
 from threading import Event, RLock
 
@@ -15,9 +16,11 @@ from omega.infrastructure.binance_series_minutes import (
     binance_minute_series,
 )
 from omega.infrastructure.candles import DatabaseUnavailable
+from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.runtime.collector_history import HistoryWorker, read_inventory
 from omega.runtime.collector_server import CollectorAPIServer, read_api_token
+from omega.runtime.collector_write_queue import CollectorWriteQueue, run_write
 from omega.runtime.control import InstanceLock
 from omega.runtime.market_history_fetch import RemoteHistoryFetch
 from omega.runtime.market_ipc import MarketSocket, serve_market_socket
@@ -32,8 +35,9 @@ from omega.runtime.market_wire import (
 
 
 class DatabaseIngestion:
-    def __init__(self, settings, series, stop):
+    def __init__(self, settings, series, stop, *, write=run_write):
         self.settings, self.series, self.stop = settings, series, stop
+        self.write = write
         self.lock = RLock()
         self.bars = self.auxiliary = None
 
@@ -57,6 +61,16 @@ class DatabaseIngestion:
             raise ProtocolError("market batch contains an unsubscribed instrument")
 
     def dispatch(self, operation, args):
+        kind = {
+            "starts": "cursor",
+            "bars": "repair" if args.get("missing_only") else "stream_bars",
+            "auxiliary": "stream_auxiliary",
+        }.get(operation)
+        if kind is None:
+            raise ProtocolError("unknown database manager operation")
+        return self.write(kind, self._handle, operation, args)
+
+    def _handle(self, operation, args):
         with self.lock:
             try:
                 if operation == "starts":
@@ -78,7 +92,10 @@ class DatabaseIngestion:
                         for item in self.series.values()
                     }
                 if operation == "bars":
-                    if type(args["missing_only"]) is not bool or not 1 <= len(args["rows"]) <= 256:
+                    if (
+                        type(args["missing_only"]) is not bool
+                        or not 1 <= len(args["rows"]) <= COMMIT_BATCH_ROWS
+                    ):
                         raise ValidationError("invalid live bar batch")
                     rows = [minute_from_document(row) for row in args["rows"]]
                     self._allowed(row.candle.instrument for row in rows)
@@ -87,7 +104,7 @@ class DatabaseIngestion:
                         for row in self._bars().put_batch(rows, missing_only=args["missing_only"])
                     ]
                 if operation == "auxiliary":
-                    if not 1 <= len(args["rows"]) <= 256:
+                    if not 1 <= len(args["rows"]) <= COMMIT_BATCH_ROWS:
                         raise ValidationError("invalid live auxiliary batch")
                     rows = [auxiliary_from_document(row) for row in args["rows"]]
                     self._allowed(instrument for instrument, _ in rows)
@@ -107,17 +124,20 @@ class DatabaseBarSink:
         self.starts = {instrument: starts[instrument.key] for instrument in instruments}
 
     def put_batch(self, observations, *, missing_only=False):
-        rows = self.connection.call(
-            "bars", rows=[minute_document(row) for row in observations], missing_only=missing_only
-        )
-        decoded = [candle_from_document(row) for row in rows]
-        for original, committed in zip(observations, decoded, strict=True):
-            if (
-                original.candle.instrument != committed.instrument
-                or original.candle.open_time_ms != committed.open_time_ms
-            ):
-                raise ProtocolError("database reply does not match the committed batch")
-        return decoded
+        committed = []
+        for batch in batched(observations, COMMIT_BATCH_ROWS, strict=False):
+            rows = self.connection.call(
+                "bars", rows=[minute_document(row) for row in batch], missing_only=missing_only
+            )
+            for original, document in zip(batch, rows, strict=True):
+                candle = candle_from_document(document)
+                if (
+                    original.candle.instrument != candle.instrument
+                    or original.candle.open_time_ms != candle.open_time_ms
+                ):
+                    raise ProtocolError("database reply does not match the committed batch")
+                committed.append(candle)
+        return committed
 
     def close(self):
         pass
@@ -128,8 +148,12 @@ class DatabaseAuxiliarySink:
         self.connection = MarketSocket(path)
 
     def put_live_batch(self, batch):
-        return self.connection.call(
-            "auxiliary", rows=[auxiliary_document(instrument, row) for instrument, row in batch]
+        return sum(
+            self.connection.call(
+                "auxiliary",
+                rows=[auxiliary_document(instrument, row) for instrument, row in part],
+            )
+            for part in batched(batch, COMMIT_BATCH_ROWS, strict=False)
         )
 
     def close(self):
@@ -156,9 +180,12 @@ def main(argv=None):
     if {instrument: item.series_id for instrument, item in series.items()} != inventory:
         raise ValidationError("data manager series differ from the saved inventory")
     ipc = root / "ipc"
-    ingest = DatabaseIngestion(settings, series, stop)
     # The old backfill owner shares this lock across upgrades.
-    with closing(InstanceLock(root / "history-worker.lock")), closing(ingest):
+    with (
+        closing(InstanceLock(root / "history-worker.lock")),
+        closing(CollectorWriteQueue()) as writes,
+        closing(DatabaseIngestion(settings, series, stop, write=writes.run)) as ingest,
+    ):
         ingest._bars()
         with serve_market_socket(ipc / "database.sock", ingest.dispatch, capacity=8):
             api = CollectorAPIServer(
@@ -172,7 +199,13 @@ def main(argv=None):
                 print('{"data_manager":"ready"}', flush=True)
                 fetch = RemoteHistoryFetch(ipc / "market.sock")
                 HistoryWorker(
-                    root, settings, inventory, stop, fetch, workers=args.fetch_workers
+                    root,
+                    settings,
+                    inventory,
+                    stop,
+                    fetch,
+                    workers=args.fetch_workers,
+                    write=writes.run,
                 ).run()
             except InterruptedError:
                 if not stop.is_set():

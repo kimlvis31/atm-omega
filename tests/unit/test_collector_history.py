@@ -9,7 +9,6 @@ import pytest
 
 from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.domain.models import Instrument, Market
-from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
 from omega.infrastructure.binance.vision import VisionArchive
 from omega.infrastructure.binance.vision_market import VisionMarketData
 from omega.runtime.collect_aux_live import LiveAuxiliary
@@ -125,7 +124,8 @@ def test_spot_trade_archive_skips_only_zero_value_placeholders(
 
 
 def test_history_checkpoint_only_advances_after_every_batch_commits(tmp_path, monkeypatch):
-    limit = AUXILIARY_BATCH_SIZE
+    limit = 4
+    monkeypatch.setattr("omega.runtime.collector_aux_history.AUXILIARY_BATCH_SIZE", limit)
     start = DAY
     end = start + (limit + 1) * MINUTE
     rows = list(range(limit + 1))
