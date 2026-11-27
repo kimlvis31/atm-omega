@@ -13,8 +13,8 @@ from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.infrastructure.candles import (
     CANDLE_COLUMNS,
     EPOCH,
-    DatabaseUnavailable,
     connect_database,
+    database_storage_error,
 )
 from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import DatabaseSettings
@@ -61,22 +61,7 @@ class PostgresBarSeriesStore:
             raise failure from None
 
     def _storage_error(self, error, message):
-        state = getattr(error, "sqlstate", None) or ""
-        if (
-            self.connection.broken
-            or state.startswith("08")
-            or state
-            in {
-                "40001",  # Serialization failure
-                "40P01",  # Deadlock
-                "55P03",  # Lock timeout
-                "57P01",  # Server terminated the session
-                "57P02",  # Server shut down after a crash
-                "57P03",  # Server is starting
-            }
-        ):
-            return DatabaseUnavailable("base-bar database temporarily unavailable")
-        return StorageError(message)
+        return database_storage_error(self.connection, error, message)
 
     def register(self, series: BarSeries) -> bool:
         if not isinstance(series, BarSeries):
@@ -130,8 +115,10 @@ class PostgresBarSeriesStore:
         try:
             with self.connection.transaction():
                 return self._insert_batch((observation,))[0][0][0]
-        except self._database_error:
-            raise StorageError("bar commit failed; retry with the same series and time") from None
+        except self._database_error as error:
+            raise self._storage_error(
+                error, "bar commit failed; retry the same series and time"
+            ) from None
 
     def import_batch(
         self, series: BarSeries, observations: tuple[SeriesObservation, ...], *, mirror=False
@@ -160,8 +147,10 @@ class PostgresBarSeriesStore:
             if self.on_commit is not None and not mirror and count:
                 self.on_commit("backfill", "kline", count, new_bytes)
             return count
-        except self._database_error:
-            raise StorageError("base-bar batch failed; retry the same ordered batch") from None
+        except self._database_error as error:
+            raise self._storage_error(
+                error, "base-bar batch failed; retry the same ordered batch"
+            ) from None
 
     def claim_live_series(self, series: BarSeries, now_ms: int) -> int:
         """Own one series writer and recover its first due position from committed bars."""

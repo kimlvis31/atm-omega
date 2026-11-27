@@ -18,6 +18,23 @@ class DatabaseUnavailable(StorageError):
     """The persistence connection or transaction can be attempted again."""
 
 
+def connection_lost(connection, error=None) -> bool:
+    state = getattr(error, "sqlstate", None) or ""
+    return (
+        getattr(connection, "closed", False)
+        or getattr(connection, "broken", False)
+        or state.startswith("08")
+        or state in {"57P01", "57P02", "57P03"}
+    )
+
+
+def database_storage_error(connection, error, message):
+    state = getattr(error, "sqlstate", None)
+    if connection_lost(connection, error) or state in {"40001", "40P01", "55P03", "57014"}:
+        return DatabaseUnavailable(message)
+    return StorageError(message)
+
+
 def connect_database(settings: DatabaseSettings):
     try:
         import psycopg

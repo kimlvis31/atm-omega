@@ -3,7 +3,6 @@
 from decimal import Decimal
 from threading import BoundedSemaphore, Event, local
 
-from omega.application.trade_flow import trade_flow_values
 from omega.domain.errors import ProtocolError, TransportError, ValidationError
 from omega.domain.models import Market
 from omega.infrastructure.binance.auxiliary_client import BinanceAuxiliaryClient
@@ -16,10 +15,10 @@ from omega.infrastructure.binance.vision import DAY, VisionArchive
 from omega.infrastructure.binance.vision_market import VisionMarketData
 from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.raw_archive import FileRawArchive
-from omega.ports.raw_data import PublicRawResponse
 from omega.runtime.collector_aux_history import HistoricalAuxiliaryFetch
 from omega.runtime.collector_history import CHANNELS, MINUTE, clock_ms, discover, log
 from omega.runtime.market_ipc import BackfillPaused, MarketSocket
+from omega.runtime.market_trade_repair import TradeRepair
 from omega.runtime.market_wire import (
     auxiliary_document,
     auxiliary_from_document,
@@ -28,13 +27,32 @@ from omega.runtime.market_wire import (
     minute_from_document,
 )
 
+AUXILIARY_KINDS = {
+    "agg_trade": {"trade_flow"},
+    "depth": {"depth"},
+    "metrics": {"open_interest", "long_short_ratio"},
+}
+
+
+def _verified_windows(channel, rows):
+    observed = {name: set() for name in AUXILIARY_KINDS[channel]}
+    for row in rows:
+        if row.quality == "observed":
+            observed[row.channel].add(row.window_start_ms)
+    return len(set.intersection(*observed.values()))
+
 
 class MarketHistoryFetch:
     def __init__(self, root, inventory, stop, *, workers=12):
         self.root, self.inventory, self.stop = root, set(inventory), stop
         self.budget = SharedRequestBudget(root / "binance-public-budget.json")
-        self.repair_budget = RequestBudget((Window("repair", 120, 60),))
-        self.raw = FileRawArchive(root / "history-repair-raw")
+        self.repair = TradeRepair(
+            root,
+            FileRawArchive(root / "history-repair-raw"),
+            RequestBudget((Window("repair", 120, 60),)),
+            clock_ms=clock_ms,
+            stop_requested=stop.is_set,
+        )
         self.workers = local()
         self.downloads = BoundedSemaphore(workers)
         self.backfill_paused = Event()
@@ -55,7 +73,11 @@ class MarketHistoryFetch:
                 )
                 rest[market] = BinanceMarketData(market, client)
                 auxiliary[market] = BinanceAuxiliaryClient(market, client)
-            vision = VisionArchive(self.root / "vision-history", stop_requested=self.stop.is_set)
+            vision = VisionArchive(
+                self.root / "vision-history",
+                stop_requested=self.stop.is_set,
+                shared_admission=self.admission,
+            )
             self.workers.state = (
                 rest,
                 auxiliary,
@@ -72,53 +94,6 @@ class MarketHistoryFetch:
             open_ms=opening,
             close_ms=closing,
             source_row=source_row,
-        )
-
-    def _repair(self, instrument, opening, client):
-        end, pending = opening + MINUTE, []
-        archive_ids = []
-        for _ in range(16):
-            parameters = (
-                {"from_id": pending[-1].aggregate_id + 1}
-                if pending
-                else {
-                    "start_ms": opening,
-                    "end_ms": end,
-                }
-            )
-            self.repair_budget.reserve({"repair": 4 if instrument.market == Market.SPOT else 20})
-            batch = client.agg_trades(instrument, **parameters, limit=1000)
-            receipt = self.raw.put(
-                PublicRawResponse(
-                    instrument,
-                    "agg_trades",
-                    batch.request_parameters,
-                    batch.received_at_ms,
-                    batch.body,
-                    batch.headers,
-                )
-            )
-            archive_ids.append(receipt.archive_id)
-            pending.extend(
-                item.as_flow_event() for item in batch.events if item.trade_time_ms < end
-            )
-            if len(batch.events) < 1000 or batch.events[-1].trade_time_ms >= end:
-                break
-        else:
-            return None
-        if not pending or any(
-            left.aggregate_id + 1 != right.aggregate_id
-            for left, right in zip(pending, pending[1:], strict=False)
-        ):
-            return None
-        values = dict(trade_flow_values(pending))
-        return (
-            {
-                name: str(value) if isinstance(value, Decimal) else value
-                for name, value in values.items()
-            },
-            len(pending),
-            archive_ids,
         )
 
     def dispatch(self, operation, args):
@@ -198,7 +173,7 @@ class MarketHistoryFetch:
         if operation == "repair_trade":
             if end - start != MINUTE or start % MINUTE:
                 raise ValidationError("invalid trade repair window")
-            return self._repair(requested, start, auxiliary[requested.market])
+            return self.repair.collect(requested, start, auxiliary[requested.market])
 
         if operation != "aux_day":
             raise ProtocolError("unknown market fetch operation")
@@ -232,18 +207,7 @@ class MarketHistoryFetch:
         unsaved = [row for row in rows if row.window_start_ms not in known]
         if len(unsaved) > COMMIT_BATCH_ROWS:
             raise ProtocolError("backfill reply exceeds the reserved rows")
-        if channel == "metrics":
-            coverage = [
-                {
-                    row.window_start_ms
-                    for row in unsaved
-                    if row.channel == name and row.quality == "observed"
-                }
-                for name in ("open_interest", "long_short_ratio")
-            ]
-            verified = len(coverage[0] & coverage[1])
-        else:
-            verified = sum(row.quality == "observed" for row in unsaved)
+        verified = _verified_windows(channel, unsaved)
         return archive, from_rest, [auxiliary_document(requested, row) for row in unsaved], verified
 
 
@@ -265,8 +229,12 @@ class RemoteHistoryFetch:
         documents, archive = self.connection.call(
             "klines", instrument=instrument.key, start=start, end=end, windows=windows
         )
-        if len(documents) > COMMIT_BATCH_ROWS:
-            raise ProtocolError("backfill bar reply exceeds the reserved rows")
+        if (
+            type(archive) is not bool
+            or not isinstance(documents, list)
+            or len(documents) > COMMIT_BATCH_ROWS
+        ):
+            raise ProtocolError("invalid backfill bar reply")
         rows = tuple(minute_from_document(row) for row in documents)
         allowed = {stamp for low, high in windows for stamp in range(low, high, MINUTE)}
         if any(
@@ -274,6 +242,11 @@ class RemoteHistoryFetch:
             for row in rows
         ):
             raise ProtocolError("candle reply is outside the requested gaps")
+        if any(
+            left.candle.open_time_ms >= right.candle.open_time_ms
+            for left, right in zip(rows, rows[1:], strict=False)
+        ):
+            raise ProtocolError("backfill bar reply must have unique ordered times")
         return rows, archive
 
     def day(self, instrument, channel, start, end, allow_rest, volumes, known):
@@ -287,14 +260,32 @@ class RemoteHistoryFetch:
             known=sorted(known),
             allow_rest=allow_rest,
         )
+        if (
+            type(archive) is not bool
+            or type(from_rest) is not bool
+            or (from_rest and (archive or channel != "metrics" or not allow_rest))
+            or not isinstance(documents, list)
+            or len(documents) > COMMIT_BATCH_ROWS
+            or (documents and not (archive or from_rest))
+            or type(verified) is not int
+        ):
+            raise ProtocolError("invalid backfill auxiliary reply")
         rows = []
-        if len(documents) > COMMIT_BATCH_ROWS:
-            raise ProtocolError("backfill auxiliary reply exceeds the reserved rows")
         for value in documents:
             owner, observation = auxiliary_from_document(value)
-            if owner != instrument or not start <= observation.window_start_ms < end:
+            opening = observation.window_start_ms
+            interval = 300_000 if channel == "metrics" else MINUTE
+            if (
+                owner != instrument
+                or observation.channel not in AUXILIARY_KINDS[channel]
+                or not start <= opening < end
+                or opening % interval
+                or opening in known
+            ):
                 raise ProtocolError("market response is outside the requested window")
             rows.append(observation)
+        if verified != _verified_windows(channel, rows):
+            raise ProtocolError("backfill auxiliary coverage disagrees with the received rows")
         return archive, from_rest, rows, verified
 
     def repair_trade(self, instrument, opening):

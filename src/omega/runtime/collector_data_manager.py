@@ -15,7 +15,7 @@ from omega.infrastructure.binance_series_minutes import (
     BinanceMinuteSeriesStore,
     binance_minute_series,
 )
-from omega.infrastructure.candles import DatabaseUnavailable
+from omega.infrastructure.candles import DatabaseUnavailable, connection_lost
 from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.runtime.collector_history import HistoryWorker, read_inventory
@@ -116,7 +116,13 @@ class DatabaseIngestion:
                         )
                     return self.auxiliary.put_live_batch(rows)
             except DatabaseUnavailable:
-                self.close()
+                for field, session in (
+                    ("bars", self.bars.store if self.bars is not None else None),
+                    ("auxiliary", self.auxiliary),
+                ):
+                    if session is not None and connection_lost(session.connection):
+                        session.close()
+                        setattr(self, field, None)
                 raise
         raise ProtocolError("unknown database manager operation")
 

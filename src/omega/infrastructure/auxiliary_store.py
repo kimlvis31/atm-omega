@@ -14,7 +14,7 @@ from omega.domain.errors import ProtocolError, StorageError, ValidationError
 from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Instrument
 from omega.infrastructure.auxiliary_codec import decode_observation, encode_observation
-from omega.infrastructure.candles import EPOCH, connect_database
+from omega.infrastructure.candles import EPOCH, connect_database, database_storage_error
 from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import database_destination_id
 from omega.infrastructure.postgres.schema import verify_schema
@@ -78,9 +78,12 @@ class PostgresAuxiliaryStore:
         self._database_error = psycopg.Error
         try:
             verify_schema(self.connection)
-        except (psycopg.Error, StorageError):
+        except (psycopg.Error, StorageError) as error:
+            failure = database_storage_error(
+                self.connection, error, "auxiliary schema is not ready; run omega-db migrate"
+            )
             self.connection.close()
-            raise StorageError("auxiliary schema is not ready; run omega-db migrate") from None
+            raise failure from None
 
     @property
     def destination_id(self):
@@ -214,9 +217,9 @@ class PostgresAuxiliaryStore:
             if written_bytes is not None:
                 self.on_commit("repair", observation.channel, 1, written_bytes)
             return receipt
-        except self._database_error:
-            raise StorageError(
-                "auxiliary commit failed; reconcile before retrying repair"
+        except self._database_error as error:
+            raise database_storage_error(
+                self.connection, error, "auxiliary commit failed; reconcile before retrying repair"
             ) from None
 
     def put_history_batch(self, instrument, observations):
@@ -352,8 +355,10 @@ class PostgresAuxiliaryStore:
             for channel, (rows, bytes_saved) in totals.items():
                 self.on_commit("backfill" if history else "live", channel, rows, bytes_saved)
             return len(inserts)
-        except self._database_error:
-            raise StorageError("auxiliary batch commit failed") from None
+        except self._database_error as error:
+            raise database_storage_error(
+                self.connection, error, "auxiliary batch commit failed"
+            ) from None
 
     def get(self, instrument, channel, source, open_time_ms, *, as_of_ms):
         key = _identity(instrument, channel, source, open_time_ms)
@@ -376,8 +381,8 @@ class PostgresAuxiliaryStore:
                     else self._stored(instrument, channel, source, open_time_ms, row)
                 )
             return result
-        except self._database_error:
-            raise StorageError("auxiliary query failed") from None
+        except self._database_error as error:
+            raise database_storage_error(self.connection, error, "auxiliary query failed") from None
 
     def close(self):
         self.connection.close()

@@ -1,11 +1,13 @@
 """Private bounded request/response sockets for the market collector and data manager."""
 
 import json
+import math
 import os
 import socket
 import socketserver
 import stat
 import struct
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -42,9 +44,13 @@ ERRORS = {
 }
 
 
-def _read_exact(sock, n):
+def _read_exact(sock, n, deadline):
     result = bytearray()
     while len(result) < n:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("market IPC frame deadline expired")
+        sock.settimeout(remaining)
         chunk = sock.recv(min(65536, n - len(result)))
         if not chunk:
             raise TransportError("incomplete market IPC frame")
@@ -52,12 +58,36 @@ def _read_exact(sock, n):
     return result
 
 
-def _read(sock):
-    size = struct.unpack("!I", _read_exact(sock, 4))[0]
+def _reject_constant(_value):
+    raise ValueError("non-finite JSON constant")
+
+
+def _finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
+def _unique_fields(pairs):
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("duplicate JSON field")
+    return fields
+
+
+def _read(sock, timeout):
+    deadline = time.monotonic() + timeout
+    size = struct.unpack("!I", _read_exact(sock, 4, deadline))[0]
     if not 1 <= size <= MAX_FRAME:
         raise ProtocolError("market IPC frame exceeds its bound")
     try:
-        return json.loads(_read_exact(sock, size))
+        return json.loads(
+            _read_exact(sock, size, deadline),
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
+            object_pairs_hook=_unique_fields,
+        )
     except (UnicodeError, ValueError, RecursionError):
         raise ProtocolError("invalid market IPC document") from None
 
@@ -86,7 +116,7 @@ class MarketSocket:
                 connection.connect(self.path)
                 connection.settimeout(self.response_timeout)
                 _write(connection, {"id": identity, "operation": operation, "arguments": arguments})
-                reply = _read(connection)
+                reply = _read(connection, self.response_timeout)
         except (OSError, TransportError):
             raise DatabaseUnavailable("local market peer is unavailable") from None
         if not isinstance(reply, dict) or reply.get("id") != identity:
@@ -136,9 +166,8 @@ class _MarketServer(socketserver.TCPServer):
 
 class _MarketRequest(socketserver.BaseRequestHandler):
     def handle(self):
-        self.request.settimeout(12)
         try:
-            request = _read(self.request)
+            request = _read(self.request, 12)
             if (
                 not isinstance(request, dict)
                 or not isinstance(request.get("id"), str)
@@ -157,6 +186,7 @@ class _MarketRequest(socketserver.BaseRequestHandler):
                 reply["error"] = "TransportError"
             except (KeyError, TypeError, ValueError, ArithmeticError):
                 reply["error"] = "ValidationError"
+            self.request.settimeout(12)
             _write(self.request, reply)
         except (OSError, ProtocolError, TransportError):
             pass

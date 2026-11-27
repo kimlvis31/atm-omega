@@ -100,9 +100,7 @@ def test_spot_trade_archive_skips_only_zero_value_placeholders(
 ):
     instrument = Instrument("binance", Market.SPOT, "BNBUSDT")
     day = 1_512_345_600_000
-    descriptor = SimpleNamespace(
-        object_key="BNBUSDT-aggTrades-2017-12-04.zip", day_start_ms=day
-    )
+    descriptor = SimpleNamespace(object_key="BNBUSDT-aggTrades-2017-12-04.zip", day_start_ms=day)
     archive_path = tmp_path / descriptor.object_key
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr(
@@ -112,9 +110,7 @@ def test_spot_trade_archive_skips_only_zero_value_placeholders(
             f"3,2.48,57,11,11,{day + 30},True,True\n",
         )
     vision = VisionArchive(tmp_path)
-    monkeypatch.setattr(
-        vision, "_archive", lambda *_: SimpleNamespace(archive_path=archive_path)
-    )
+    monkeypatch.setattr(vision, "_archive", lambda *_: SimpleNamespace(archive_path=archive_path))
     if placeholder_quantity == "0":
         rows = list(vision._file_rows(instrument, "agg_trade", descriptor))
         assert [(row.values[0], row.row_number) for row in rows] == [("1", 1), ("3", 3)]
@@ -295,3 +291,91 @@ def test_backfill_plan_requests_only_uncovered_minutes():
         {start, start + 2 * MINUTE},
         [(start + MINUTE, start + 2 * MINUTE), (start + 3 * MINUTE, end)],
     )
+
+
+@pytest.mark.parametrize("live_offset, reads", [(0, 0), (-1, 0), (1, 1)])
+def test_history_mirror_uses_only_the_committed_live_prefix(live_offset, reads):
+    from dataclasses import replace
+
+    from omega.infrastructure.binance_series_minutes import binance_minute_series
+
+    worker = HistoryWorker.__new__(HistoryWorker)
+    worker.stop = Event()
+    live = binance_minute_series((INSTRUMENT,), 4 * MINUTE)[INSTRUMENT]
+    complete = replace(live, effective_from_ms=MINUTE)
+    worker.history_series = {(INSTRUMENT, MINUTE): (live, complete)}
+    cursor = live.effective_from_ms
+    mirror = cursor + MINUTE
+    checked = []
+
+    class DB:
+        def execute(self, query, params):
+            assert "series_live_cursor" in query and params[1] == live.series_id
+            return SimpleNamespace(
+                fetchone=lambda: (
+                    complete.series_id,
+                    cursor,
+                    cursor,
+                    mirror,
+                    mirror + live_offset * MINUTE,
+                )
+            )
+
+    def read_observations(series_id, start, end, **kwargs):
+        assert series_id == live.series_id and kwargs["include_raw"]
+        assert (start, end) == (mirror, mirror + MINUTE)
+        checked.append(start)
+        return ()  # A later receipt is still beyond the as-of fence.
+
+    result = worker._prepare_kline(
+        DB(), SimpleNamespace(read_observations=read_observations), None, INSTRUMENT, MINUTE
+    )
+    assert result is None and len(checked) == reads
+
+
+def test_history_reconnects_after_a_disconnected_session(monkeypatch):
+    from omega.infrastructure.candles import DatabaseUnavailable
+
+    worker = HistoryWorker.__new__(HistoryWorker)
+    worker.stop, worker.workers = Event(), 1
+    attempts = []
+
+    def connection_round(pool):
+        attempts.append(pool)
+        if len(attempts) == 1:
+            raise DatabaseUnavailable("test connection ended")
+        worker.stop.set()
+
+    monkeypatch.setattr(worker, "_run_connected", connection_round)
+    monkeypatch.setattr(worker.stop, "wait", lambda _: False)
+    worker.run()
+    assert len(attempts) == 2 and attempts[0] is attempts[1]
+
+
+def test_market_reply_counts_only_verified_metrics_pairs():
+    from omega.domain.market_inputs import AuxiliaryInput
+    from omega.runtime.market_history_fetch import RemoteHistoryFetch
+    from omega.runtime.market_wire import auxiliary_document
+
+    source = INSTRUMENT.key + ":open_interest_history"
+    opening = 300_000
+    observation = AuxiliaryInput(
+        "open_interest",
+        (("METRIC_OPENINTEREST", 1),),
+        opening,
+        opening + MINUTE,
+        opening,
+        opening + MINUTE,
+        source=source,
+    )
+    fetch = RemoteHistoryFetch.__new__(RemoteHistoryFetch)
+    fetch.connection = SimpleNamespace(
+        call=lambda *_args, **_kwargs: (
+            True,
+            False,
+            [auxiliary_document(INSTRUMENT, observation)],
+            1,
+        )
+    )
+    with pytest.raises(ProtocolError, match="coverage disagrees"):
+        fetch.day(INSTRUMENT, "metrics", opening, opening + 5 * MINUTE, False, None, set())

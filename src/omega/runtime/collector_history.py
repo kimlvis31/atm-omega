@@ -11,6 +11,7 @@ from decimal import Decimal
 from hashlib import sha256
 from itertools import zip_longest
 
+from psycopg import InterfaceError, OperationalError
 from psycopg.errors import QueryCanceled
 
 from omega.application.trade_flow import trade_flow_values
@@ -20,6 +21,7 @@ from omega.domain.errors import (
     ProtocolError,
     RateLimited,
     StorageError,
+    TransportError,
     ValidationError,
 )
 from omega.domain.market_inputs import AuxiliaryInput
@@ -27,7 +29,7 @@ from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
 from omega.infrastructure.bar_series_store import BAR_WRITE_BATCH_SIZE, PostgresBarSeriesStore
 from omega.infrastructure.binance.vision import DAY
-from omega.infrastructure.candles import connect_database
+from omega.infrastructure.candles import DatabaseUnavailable, connect_database, connection_lost
 from omega.infrastructure.collector_coverage import (
     first_covered,
     note_source_check,
@@ -132,6 +134,7 @@ class HistoryWorker:
         self.fetch, self.workers, self.write = fetch, workers, write
         self.on_commit = on_commit
         self.origins = None
+        self.history_series = {}
         self.auxiliary_history = DailyAuxiliaryHistory(
             root, None, None, clock_ms=clock_ms, stop=stop, fetch=fetch, write=write
         )
@@ -231,7 +234,10 @@ class HistoryWorker:
                 opened = stamp
         return stop, existing, gaps
 
-    def _prepare_kline(self, db, store, pool, instrument, origin):
+    def _kline_series(self, db, store, instrument, origin):
+        key = (instrument, origin)
+        if key in self.history_series:
+            return self.history_series[key]
         live = store.load(self.inventory[instrument])
         if live.instrument != instrument or live.feed != "binance-public":
             raise ProtocolError("history inventory does not match its live series")
@@ -239,7 +245,8 @@ class HistoryWorker:
         complete = replace(live, effective_from_ms=min(first, live.effective_from_ms))
         store.register(complete)
         if complete == live:
-            return None
+            self.history_series[key] = (live, complete)
+            return live, complete
         db.execute(
             """INSERT INTO market.binance_kline_history
                (instrument, live_series_id, historical_series_id, next_ms, end_ms, mirror_ms)
@@ -253,22 +260,36 @@ class HistoryWorker:
                 live.effective_from_ms,
             ),
         )
-        saved_series, cursor, end, mirror = db.execute(
-            "SELECT historical_series_id,next_ms,end_ms,mirror_ms "
-            "FROM market.binance_kline_history WHERE instrument=%s",
-            (instrument.key,),
+        self.history_series[key] = live, complete
+        return live, complete
+
+    def _prepare_kline(self, db, store, pool, instrument, origin):
+        live, complete = self._kline_series(db, store, instrument, origin)
+        if complete == live:
+            return None
+        row = db.execute(
+            """SELECT h.historical_series_id,h.next_ms,h.end_ms,h.mirror_ms,l.next_ms
+               FROM market.binance_kline_history h
+               JOIN market.series_live_cursor l ON l.series_id=h.live_series_id
+               WHERE h.instrument=%s AND h.live_series_id=%s""",
+            (instrument.key, live.series_id),
         ).fetchone()
+        if row is None:
+            raise StorageError("saved historical or live cursor is missing")
+        saved_series, cursor, end, mirror, committed_live = row
         if saved_series != complete.series_id or end != live.effective_from_ms:
             raise StorageError("saved historical series conflicts with discovery")
-        # Keep a current suffix in the history series too. The live identity remains available.
-        mirrored = store.read_observations(
-            live.series_id,
-            mirror,
-            mirror + BAR_WRITE_BATCH_SIZE * MINUTE,
-            as_of_ms=clock_ms(),
-            limit=BAR_WRITE_BATCH_SIZE,
-            include_raw=True,
-        )
+        # The live writer advances this cursor in the same transaction as its bars.
+        mirrored = ()
+        if committed_live > mirror:
+            mirrored = store.read_observations(
+                live.series_id,
+                mirror,
+                min(committed_live, mirror + BAR_WRITE_BATCH_SIZE * MINUTE),
+                as_of_ms=clock_ms(),
+                limit=BAR_WRITE_BATCH_SIZE,
+                include_raw=True,
+            )
         inserted = []
         for item in mirrored:
             if item.candle.open_time_ms != mirror + len(inserted) * MINUTE:
@@ -501,6 +522,8 @@ class HistoryWorker:
                 log("repair_throttled", seconds=exc.retry_after)
                 break
             except (OSError, OmegaError) as exc:
+                if isinstance(exc, (OSError, DatabaseUnavailable, TransportError)):
+                    self.retry[key] = now + TRADE_REPAIR_INTERVAL_MS
                 log(
                     "trade_repair_error",
                     instrument=instrument.key,
@@ -557,6 +580,10 @@ class HistoryWorker:
                 seconds=error.retry_after,
             )
             return
+        wait_seconds = (
+            2 if isinstance(error, (OSError, DatabaseUnavailable, TransportError)) else 15
+        )
+        self.throttled[instrument, channel] = time.monotonic() + wait_seconds
         log(
             "kline_history_error" if channel == "kline" else "auxiliary_history_error",
             instrument=instrument.key,
@@ -568,6 +595,14 @@ class HistoryWorker:
         if clock_ms() >= self.next_repair and not self.stop.is_set():
             self.recent_trade_gaps(db, auxiliary)
             self.next_repair = clock_ms() + TRADE_REPAIR_INTERVAL_MS
+
+    @staticmethod
+    def _require_connections(db, bars, auxiliary):
+        if any(
+            connection_lost(connection)
+            for connection in (db, bars.connection, auxiliary.connection)
+        ):
+            raise DatabaseUnavailable("backfill database connection ended")
 
     def _fetch_round(self, db, bars, auxiliary, pool):
         todo, pending = iter(self._tasks()), deque()
@@ -604,6 +639,7 @@ class HistoryWorker:
                     try:
                         prepared = self._prepare(db, bars, pool, task)
                     except (OSError, OmegaError, ArithmeticError) as error:
+                        self._require_connections(db, bars, auxiliary)
                         self._task_error(task, error)
                         continue
                     if prepared is not None:
@@ -615,6 +651,7 @@ class HistoryWorker:
                         try:
                             progressed |= self._persist(db, bars, auxiliary, task, prepared)
                         except (OSError, OmegaError, ArithmeticError) as error:
+                            self._require_connections(db, bars, auxiliary)
                             self._task_error(task, error)
                         del item, prepared, future
                         break
@@ -637,16 +674,27 @@ class HistoryWorker:
 
     def run(self):
         self.retry, self.throttled = {}, {}
-        self.next_repair, next_discovery = 0, 0
+        self.next_repair = 0
         self.resume_pending = True
+        with ThreadPoolExecutor(
+            max_workers=min(self.workers, BACKFILL_MAX_PAGES), thread_name_prefix="market-prefetch"
+        ) as pool:
+            while not self.stop.is_set():
+                try:
+                    self._run_connected(pool)
+                except (DatabaseUnavailable, InterfaceError, OperationalError) as error:
+                    if self.stop.is_set():
+                        return
+                    log("database_reconnect", error=type(error).__name__)
+                    self.stop.wait(2)
+
+    def _run_connected(self, pool):
+        self.history_series.clear()
+        next_discovery = 0
         with (
             connect_database(self.settings) as db,
             closing(PostgresBarSeriesStore(self.settings, on_commit=self.on_commit)) as bars,
             closing(PostgresAuxiliaryStore(self.settings, on_commit=self.on_commit)) as auxiliary,
-            ThreadPoolExecutor(
-                max_workers=min(self.workers, BACKFILL_MAX_PAGES),
-                thread_name_prefix="market-prefetch",
-            ) as pool,
         ):
             verify_schema(db)
             # Clear any pause left by an interrupted previous data manager.
@@ -665,5 +713,12 @@ class HistoryWorker:
                 if self.origins is None or now >= next_discovery:
                     self.check_origins(db)
                     next_discovery = clock_ms() + MINUTE
-                if not self._fetch_round(db, bars, auxiliary, pool):
-                    self.stop.wait(15)
+                progressed = self._fetch_round(db, bars, auxiliary, pool)
+                self._require_connections(db, bars, auxiliary)
+                if not progressed:
+                    now = time.monotonic()
+                    next_retry = min(
+                        (deadline for deadline in self.throttled.values() if deadline > now),
+                        default=now + 15,
+                    )
+                    self.stop.wait(min(15, max(0.25, next_retry - now)))
