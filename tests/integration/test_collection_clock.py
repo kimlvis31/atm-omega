@@ -199,3 +199,41 @@ def test_repair_only_requests_due_bars_from_resolved_trading_sessions():
     assert reports[-1] == (False, "calendar_unavailable")
     instance.health("rate_limited")
     assert reports[-1] == (False, "rate_limited")
+
+
+@pytest.mark.parametrize("stop_before_timer", [False, True])
+def test_stream_flushes_on_timer_or_stop_without_publishing_early(stop_before_timer):
+    async def scenario():
+        instance, store = worker(lambda: CLOSE + 400, collection.time.monotonic)
+        instance.stream_batch_seconds = 1 if stop_before_timer else 0.01
+        delivered = []
+        instance.collector.on_candle = delivered.append
+        flush, receiving = asyncio.Event(), asyncio.Event()
+
+        def put_batch(observations, *, missing_only):
+            assert not missing_only and not delivered
+            store.rows.extend(observations)
+            flush.set()
+            return [row.candle for row in observations]
+
+        store.put_batch = put_batch
+        await instance.accept_stream(RAW, received_at_ms=CLOSE + 400)
+        assert not store.rows and instance.collector.cursor[INSTRUMENT] == OPEN
+
+        class Socket:
+            async def recv(self):
+                receiving.set()
+                await asyncio.Future()
+
+        task = asyncio.create_task(instance._protection_stream(Socket()))
+        await asyncio.wait_for(receiving.wait(), 0.5)
+        if not stop_before_timer:
+            await asyncio.wait_for(flush.wait(), 0.5)
+        else:
+            assert not flush.is_set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert len(store.rows) == len(delivered) == 1
+        assert instance.collector.cursor[INSTRUMENT] == CLOSE
+
+    asyncio.run(scenario())

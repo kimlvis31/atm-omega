@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from threading import Event
@@ -7,7 +8,8 @@ import pytest
 
 from omega.domain.errors import ProtocolError, StorageError
 from omega.domain.models import Instrument, Market
-from omega.infrastructure.auxiliary_store import AUXILIARY_HISTORY_BATCH_SIZE
+from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
+from omega.runtime.collect_aux_live import LiveAuxiliary
 from omega.runtime.collector_aux_history import (
     DAY,
     MINUTE,
@@ -91,7 +93,7 @@ def test_archive_trade_uses_native_flow_contract_and_actual_receipt():
 
 
 def test_history_checkpoint_only_advances_after_every_batch_commits(tmp_path, monkeypatch):
-    limit = AUXILIARY_HISTORY_BATCH_SIZE
+    limit = AUXILIARY_BATCH_SIZE
     start = DAY
     end = start + (limit + 1) * MINUTE
     rows = list(range(limit + 1))
@@ -132,3 +134,34 @@ def test_history_checkpoint_only_advances_after_every_batch_commits(tmp_path, mo
     assert result["verified"] == len(rows)
     assert resumed.progress[key]["next_ms"] == end
     assert store.batch_sizes == [limit, 1, limit, 1]
+
+
+def test_auxiliary_stream_retries_same_batch_and_flushes_shutdown_queue():
+    async def scenario():
+        stop = asyncio.Event()
+        instance = LiveAuxiliary(None, {})
+        row = SimpleNamespace(
+            channel="trade_flow", source="test", window_start_ms=0, available_at_ms=1
+        )
+        updated = SimpleNamespace(**{**vars(row), "available_at_ms": 2})
+        other = SimpleNamespace(**{**vars(row), "channel": "depth"})
+        attempts = []
+
+        def put_batch(batch):
+            attempts.append(tuple(value for _, value in batch))
+            if len(attempts) == 1:
+                raise StorageError("temporary")
+            return len(batch)
+
+        instance._put_batch = put_batch
+        try:
+            await instance.write(INSTRUMENT, row)
+            await instance.write(INSTRUMENT, other)
+            await instance.write(INSTRUMENT, updated)
+            await instance.pending.put(None)
+            await asyncio.wait_for(instance._save_stream(stop), 2)
+            assert attempts == [(row, other), (row, other), (updated,)]
+        finally:
+            instance.storage.shutdown()
+
+    asyncio.run(scenario())

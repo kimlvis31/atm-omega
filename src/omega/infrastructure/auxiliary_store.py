@@ -24,7 +24,7 @@ from omega.ports.auxiliary import (
 )
 
 # Constants
-AUXILIARY_HISTORY_BATCH_SIZE = 256
+AUXILIARY_BATCH_SIZE = 256
 _COLUMNS = "revision,checksum,previous_checksum,payload,available_ms,event_ms"
 _KEY = "instrument=%s AND channel=%s AND dataset=%s AND open_time=%s"
 _MAX_TIME = 253_402_300_799_000
@@ -208,24 +208,31 @@ class PostgresAuxiliaryStore:
 
     def put_history_batch(self, instrument, observations):
         """Append archive evidence or upgrade older incomplete observations atomically."""
-        if len(observations) > AUXILIARY_HISTORY_BATCH_SIZE:
-            raise ValidationError("too many auxiliary observations in one history batch")
+        return self._put_ingested_batch([(instrument, row) for row in observations], history=True)
+
+    def put_live_batch(self, observations):
+        """Commit closed stream observations together, retaining the first live receipt."""
+        return self._put_ingested_batch(observations, history=False)
+
+    def _put_ingested_batch(self, observations, *, history):
+        if len(observations) > AUXILIARY_BATCH_SIZE:
+            raise ValidationError("too many auxiliary observations in one batch")
         if not observations:
             return 0
 
         by_key = {}
-        for observation in observations:
+        for instrument, observation in observations:
             if not isinstance(observation, AuxiliaryInput):
                 raise ValidationError("typed auxiliary observation required")
             key = _identity(
                 instrument, observation.channel, observation.source, observation.window_start_ms
-            )[1:]
+            )
             if key in by_key:
-                raise ValidationError("duplicate identity in auxiliary history batch")
-            by_key[key] = observation
+                raise ValidationError("duplicate identity in auxiliary batch")
+            by_key[key] = instrument, observation
 
-        lock_ids = sorted({_lock_id(instrument, value) for value in observations})
-        channels, sources, openings = map(list, zip(*by_key, strict=True))
+        lock_ids = sorted({_lock_id(instrument, row) for instrument, row in observations})
+        keys = tuple(map(list, zip(*by_key, strict=True)))
         try:
             with self.connection.transaction():
                 self.connection.execute(
@@ -238,29 +245,29 @@ class PostgresAuxiliaryStore:
                     SELECT requested.*, latest.revision, latest.checksum, latest.previous_checksum,
                            latest.payload, latest.available_ms, latest.event_ms,
                            prior.checksum, prior.available_ms
-                    FROM unnest(%s::text[], %s::text[], %s::timestamptz[])
-                        AS requested(channel,dataset,open_time)
+                    FROM unnest(%s::text[], %s::text[], %s::text[], %s::timestamptz[])
+                        AS requested(instrument,channel,dataset,open_time)
                     CROSS JOIN LATERAL (
                         SELECT revision,checksum,previous_checksum,payload,available_ms,event_ms
                         FROM market.auxiliary_minutes
-                        WHERE instrument=%s AND channel=requested.channel
+                        WHERE instrument=requested.instrument AND channel=requested.channel
                           AND dataset=requested.dataset AND open_time=requested.open_time
                         ORDER BY revision DESC LIMIT 1
                     ) AS latest
                     LEFT JOIN LATERAL (
                         SELECT checksum,available_ms
                         FROM market.auxiliary_minutes
-                        WHERE instrument=%s AND channel=requested.channel
+                        WHERE instrument=requested.instrument AND channel=requested.channel
                           AND dataset=requested.dataset AND open_time=requested.open_time
                           AND revision=latest.revision-1
                         LIMIT 1
                     ) AS prior ON latest.revision>1
                     """,
-                    (channels, sources, openings, instrument.key, instrument.key),
+                    keys,
                 ).fetchall()
-                latest_by_key = {row[:3]: row[3:] for row in rows}
+                latest_by_key = {row[:4]: row[4:] for row in rows}
                 inserts = []
-                for key, observation in by_key.items():
+                for key, (instrument, observation) in by_key.items():
                     row = latest_by_key.get(key)
                     previous, revision = None, 1
                     if row is not None:
@@ -272,10 +279,18 @@ class PostgresAuxiliaryStore:
                             row[:6],
                             previous_edge=row[6:],
                         )
-                        if (
-                            latest.observation.quality == "observed"
-                            or observation.quality != "observed"
-                            or observation.available_at_ms <= latest.observation.available_at_ms
+                        previous_observation = latest.observation
+                        if observation.available_at_ms <= previous_observation.available_at_ms:
+                            continue
+                        if history:
+                            if (
+                                previous_observation.quality == "observed"
+                                or observation.quality != "observed"
+                            ):
+                                continue
+                        elif (
+                            observation.channel not in {"open_interest", "long_short_ratio"}
+                            or previous_observation.values == observation.values
                         ):
                             continue
                         previous, revision = latest.checksum, latest.revision + 1
@@ -299,16 +314,16 @@ class PostgresAuxiliaryStore:
                         INSERT INTO market.auxiliary_minutes
                             (instrument,channel,dataset,open_time,revision,available_ms,event_ms,
                              payload,checksum,previous_checksum)
-                        SELECT %s, batch.*
-                        FROM unnest(%s::text[], %s::text[], %s::timestamptz[], %s::bigint[],
-                                    %s::bigint[], %s::bigint[], %s::bytea[], %s::text[], %s::text[])
-                            AS batch
+                        SELECT * FROM unnest(
+                            %s::text[], %s::text[], %s::text[], %s::timestamptz[], %s::bigint[],
+                            %s::bigint[], %s::bigint[], %s::bytea[], %s::text[], %s::text[]
+                        )
                         """,
-                        (instrument.key, *map(list, zip(*inserts, strict=True))),
+                        tuple(map(list, zip(*inserts, strict=True))),
                     )
             return len(inserts)
         except self._database_error:
-            raise StorageError("auxiliary history batch commit failed") from None
+            raise StorageError("auxiliary batch commit failed") from None
 
     def get(self, instrument, channel, source, open_time_ms, *, as_of_ms):
         key = _identity(instrument, channel, source, open_time_ms)

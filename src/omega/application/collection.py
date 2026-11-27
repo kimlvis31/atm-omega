@@ -54,9 +54,7 @@ class MinuteCollector:
         self.connected = False
         self.fault: str | None = None
 
-    def accept(
-        self, observation: MinuteObservation, *, now_ms: int, missing_only: bool = False
-    ) -> int:
+    def _validate(self, observation: MinuteObservation, now_ms: int) -> Candle:
         candle = observation.candle
         instrument = candle.instrument
         if instrument not in self.cursor:
@@ -71,12 +69,40 @@ class MinuteCollector:
             raise ProtocolError("bar does not match the instrument schedule")
         if observation.source not in {"rest", "websocket", "vision"}:
             raise ValidationError("unknown market observation source")
-        pending = self._pending[instrument]
-        if candle.open_time_ms > self.cursor[instrument] and (
-            candle.open_time_ms not in pending and len(pending) >= self.max_pending
-        ):
+        return candle
+
+    def _next_expected(self, candle):
+        schedule = self._schedules[candle.instrument]
+        return schedule.next_expected(candle.open_time_ms) or candle.close_time_ms
+
+    def _check_capacity(self, opening, cursor, pending):
+        if opening > cursor and opening not in pending and len(pending) >= self.max_pending:
             self.fault = "reorder_capacity"
             raise ProtocolError("minute reorder capacity exceeded; repair from durable history")
+
+    def _publish_committed(self, candle):
+        instrument = candle.instrument
+        if candle.open_time_ms < self.cursor[instrument]:
+            return 0
+        pending = self._pending[instrument]
+        pending[candle.open_time_ms] = candle
+        count = 0
+        while self.cursor[instrument] in pending:
+            current = pending[self.cursor[instrument]]
+            self.on_candle(current)  # Failure leaves cursor and pending retryable.
+            del pending[current.open_time_ms]
+            self.cursor[instrument] = self._next_expected(current)
+            count += 1
+        return count
+
+    def accept(
+        self, observation: MinuteObservation, *, now_ms: int, missing_only: bool = False
+    ) -> int:
+        candle = self._validate(observation, now_ms)
+        instrument = candle.instrument
+        self._check_capacity(
+            candle.open_time_ms, self.cursor[instrument], self._pending[instrument]
+        )
         try:
             if missing_only:
                 # A websocket commit may have completed during the REST request.
@@ -87,20 +113,29 @@ class MinuteCollector:
                     candle = stored
             else:
                 self.store.put(observation)
-            if candle.open_time_ms < self.cursor[instrument]:
-                return 0  # Store checked the immutable prior value first.
-            pending[candle.open_time_ms] = candle
-            count = 0
-            while self.cursor[instrument] in pending:
-                current = pending[self.cursor[instrument]]
-                self.on_candle(current)  # Failure leaves cursor and pending retryable.
-                del pending[current.open_time_ms]
-                schedule = self._schedules[instrument]
-                self.cursor[instrument] = (
-                    schedule.next_expected(current.open_time_ms) or current.close_time_ms
-                )
-                count += 1
-            return count
+            return self._publish_committed(candle)
+        except Exception:
+            self.fault = "storage_or_delivery"
+            raise
+
+    def accept_batch(self, observations, *, now_ms: int, missing_only: bool = False) -> int:
+        # Simulate reorder capacity without publishing before the database confirms the write.
+        cursors, queues = dict(self.cursor), {}
+        for observation in observations:
+            candle = self._validate(observation, now_ms)
+            instrument, opening = candle.instrument, candle.open_time_ms
+            if instrument not in queues:
+                queues[instrument] = dict(self._pending[instrument])
+            pending, cursor = queues[instrument], cursors[instrument]
+            self._check_capacity(opening, cursor, pending)
+            if opening >= cursor:
+                pending[opening] = candle
+                while current := pending.pop(cursor, None):
+                    cursor = self._next_expected(current)
+                cursors[instrument] = cursor
+        try:
+            committed = self.store.put_batch(observations, missing_only=missing_only)
+            return sum(self._publish_committed(candle) for candle in committed)
         except Exception:
             self.fault = "storage_or_delivery"
             raise

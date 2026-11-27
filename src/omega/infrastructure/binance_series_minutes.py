@@ -1,5 +1,8 @@
 """Adapt the existing Binance 1m websocket/REST worker to durable base-bar series."""
 
+import json
+import time
+
 from omega.domain.bar_schedule import BarSchedule
 from omega.domain.bar_series import MAX_BAR_TIME_MS, BarSeries, SeriesCandle, SeriesObservation
 from omega.domain.models import Candle
@@ -30,35 +33,78 @@ class BinanceMinuteSeriesStore:
             self.store.close()
             raise
 
-    def put(self, observation):
+    def _series_observation(self, observation):
         candle = observation.candle
         series = self.series[candle.instrument]
-        if candle.open_time_ms < series.effective_from_ms:
-            return False
         raw_source = observation.raw_source
         raw_received = observation.raw_received_at_ms
         if observation.raw is not None and raw_source is None and raw_received is None:
             raw_source = observation.source
             raw_received = observation.received_at_ms
-        return self.store.put_live_observation(
-            SeriesObservation(
-                SeriesCandle(
-                    series,
-                    candle.open_time_ms,
-                    candle.close_time_ms,
-                    candle.open,
-                    candle.high,
-                    candle.low,
-                    candle.close,
-                    candle.volume,
-                ),
-                observation.source,
-                observation.received_at_ms,
-                observation.raw,
-                raw_source,
-                raw_received,
-            )
+        return SeriesObservation(
+            SeriesCandle(
+                series,
+                candle.open_time_ms,
+                candle.close_time_ms,
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume,
+            ),
+            observation.source,
+            observation.received_at_ms,
+            observation.raw,
+            raw_source,
+            raw_received,
         )
+
+    @staticmethod
+    def _minute(candle):
+        return Candle(
+            candle.series.instrument,
+            candle.open_time_ms,
+            candle.close_time_ms,
+            candle.open,
+            candle.high,
+            candle.low,
+            candle.close,
+            candle.volume,
+        )
+
+    def put(self, observation):
+        candle = observation.candle
+        if candle.open_time_ms < self.series[candle.instrument].effective_from_ms:
+            return False
+        return self.store.put_live_observation(self._series_observation(observation))
+
+    def put_batch(self, observations, *, missing_only=False):
+        candles = [row.candle for row in observations]
+        in_scope = [
+            index
+            for index, candle in enumerate(candles)
+            if candle.open_time_ms >= self.series[candle.instrument].effective_from_ms
+        ]
+        if in_scope:
+            rows = tuple(self._series_observation(observations[index]) for index in in_scope)
+            started = time.monotonic()
+            stored = self.store.put_live_batch(rows, missing_only=missing_only)
+            print(
+                json.dumps(
+                    {
+                        "collector_write": "kline_repair" if missing_only else "kline_stream",
+                        "rows": len(rows),
+                        "inserted": sum(inserted for inserted, _ in stored),
+                        "db_ms": round((time.monotonic() - started) * 1000, 2),
+                        "commit_lag_ms": time.time_ns() // 1_000_000
+                        - min(row.received_at_ms for row in rows),
+                    }
+                ),
+                flush=True,
+            )
+            for index, (_, candle) in zip(in_scope, stored, strict=True):
+                candles[index] = self._minute(candle)
+        return candles
 
     def get(self, instrument, open_time_ms):
         series = self.series[instrument]
@@ -72,17 +118,7 @@ class BinanceMinuteSeriesStore:
         )
         if not rows:
             return None
-        candle = rows[0].candle
-        return Candle(
-            instrument,
-            candle.open_time_ms,
-            candle.close_time_ms,
-            candle.open,
-            candle.high,
-            candle.low,
-            candle.close,
-            candle.volume,
-        )
+        return self._minute(rows[0].candle)
 
     def close(self):
         self.store.close()

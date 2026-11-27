@@ -17,7 +17,7 @@ from omega.domain.errors import (
 )
 from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Market
-from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
+from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE, PostgresAuxiliaryStore
 from omega.infrastructure.binance.auxiliary import agg_trade
 from omega.infrastructure.binance.auxiliary_client import BinanceAuxiliaryClient
 from omega.infrastructure.binance.budget import RequestBudget, Window
@@ -122,6 +122,7 @@ class LiveAuxiliary:
         self.metric_requests = RequestBudget((Window("metrics", 100, 300),))
         self.connections = RequestBudget((Window("websocket", 120, 300),))
         self.store = None
+        self.pending = asyncio.Queue(maxsize=2 * AUXILIARY_BATCH_SIZE)
         self.storage = ThreadPoolExecutor(max_workers=1, thread_name_prefix="auxiliary-db")
 
     def _close(self):
@@ -129,41 +130,88 @@ class LiveAuxiliary:
             self.store.close()
             self.store = None
 
-    def _put(self, instrument, observation):
-        for _ in range(2):
+    def _put_batch(self, batch):
+        try:
+            if self.store is None:
+                self.store = PostgresAuxiliaryStore(self.settings)
+            return self.store.put_live_batch(batch)
+        except StorageError:
+            self._close()
+            raise
+
+    async def write(self, instrument, observation):
+        await self.pending.put((instrument, observation))
+
+    async def _commit(self, batch, stop):
+        delay = 0.25
+        loop = asyncio.get_running_loop()
+        while True:
             try:
-                if self.store is None:
-                    self.store = PostgresAuxiliaryStore(self.settings)
-                stored = self.store.get(
+                started = loop.time()
+                inserted = await loop.run_in_executor(self.storage, self._put_batch, batch)
+                print(
+                    json.dumps(
+                        {
+                            "collector_write": "auxiliary_stream",
+                            "rows": len(batch),
+                            "inserted": inserted,
+                            "db_ms": round((loop.time() - started) * 1000, 2),
+                            "commit_lag_ms": now_ms()
+                            - min(row.available_at_ms for _, row in batch),
+                        }
+                    ),
+                    flush=True,
+                )
+                return
+            except StorageError:
+                if stop.is_set():
+                    # Signal an unflushed shutdown to the supervisor.
+                    raise
+                print(json.dumps({"auxiliary_batch": "retry", "rows": len(batch)}), flush=True)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=delay)
+                except TimeoutError:
+                    delay = min(5, delay * 2)
+
+    async def _save_stream(self, stop):
+        loop = asyncio.get_running_loop()
+        pending = await self.pending.get()
+        while pending is not None:
+            batch, keys = [], set()
+            deadline = loop.time() + 0.2
+            while pending is not None:
+                instrument, observation = pending
+                key = (
                     instrument,
                     observation.channel,
                     observation.source,
                     observation.window_start_ms,
-                    as_of_ms=now_ms(),
                 )
-                # Repeated 5m polls and restarts preserve the first availability time.
-                if stored is None:
-                    self.store.put(instrument, observation)
-                    return True
-                if stored.observation.values != observation.values and observation.channel in {
-                    "open_interest",
-                    "long_short_ratio",
-                }:
-                    self.store.put(instrument, observation, expected_previous=stored.checksum)
-                    return True
-                return False
-            except StorageError:
-                self._close()
-        raise StorageError("auxiliary database unavailable")
-
-    async def write(self, instrument, observation):
-        try:
-            return await asyncio.get_running_loop().run_in_executor(
-                self.storage, self._put, instrument, observation
-            )
-        except (StorageError, ProtocolError) as exc:
-            report(observation.channel, instrument, "storage_error", error=type(exc).__name__)
-            return False
+                if key in keys:
+                    break
+                keys.add(key)
+                batch.append(pending)
+                if len(batch) == AUXILIARY_BATCH_SIZE:
+                    pending = None
+                    break
+                try:
+                    pending = self.pending.get_nowait()
+                except asyncio.QueueEmpty:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        pending = None
+                        break
+                    try:
+                        pending = await asyncio.wait_for(self.pending.get(), timeout=remaining)
+                    except TimeoutError:
+                        pending = None
+                        break
+                if pending is None:
+                    await self._commit(batch, stop)
+                    return  # Stop sentinel arrived after the last admitted observation.
+            await self._commit(batch, stop)
+            if pending is None:
+                pending = await self.pending.get()
 
     async def _trade_session(self, socket, instrument, rollup):
         report("trade_flow", instrument, "subscribed")
@@ -407,6 +455,7 @@ class LiveAuxiliary:
 
         try:
             async with asyncio.TaskGroup() as group:
+                group.create_task(self._save_stream(stop))
                 tasks = []
                 for index, instrument in enumerate(instruments):
                     tasks.extend(
@@ -422,6 +471,8 @@ class LiveAuxiliary:
                 await stop.wait()
                 for task in tasks:
                     task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                await self.pending.put(None)
         finally:
             await asyncio.get_running_loop().run_in_executor(self.storage, self._close)
             self.storage.shutdown()

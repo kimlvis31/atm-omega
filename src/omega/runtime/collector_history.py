@@ -26,7 +26,7 @@ from omega.domain.errors import (
 from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
-from omega.infrastructure.bar_series_store import PostgresBarSeriesStore
+from omega.infrastructure.bar_series_store import BAR_WRITE_BATCH_SIZE, PostgresBarSeriesStore
 from omega.infrastructure.binance.auxiliary_client import BinanceAuxiliaryClient
 from omega.infrastructure.binance.budget import RequestBudget, Window
 from omega.infrastructure.binance.client import BinanceClient
@@ -298,10 +298,10 @@ class HistoryWorker:
                     item.raw_received_at_ms,
                 )
             )
-        for offset in range(0, len(batch), 256):
+        for offset in range(0, len(batch), BAR_WRITE_BATCH_SIZE):
             if self.stop.is_set():
                 return False
-            store.import_batch(complete, tuple(batch[offset : offset + 256]))
+            store.import_batch(complete, tuple(batch[offset : offset + BAR_WRITE_BATCH_SIZE]))
         missing = (until - cursor) // MINUTE - len(batch)
         # Commit the cursor only after the imported data is readable. Preserve exact
         # unresolved ranges for recheck instead of generating bars in missing slots.

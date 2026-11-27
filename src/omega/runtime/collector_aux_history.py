@@ -8,7 +8,7 @@ from omega.application.trade_flow import trade_flow_values
 from omega.domain.errors import ProtocolError, StorageError
 from omega.domain.market_inputs import AuxiliaryInput, TradeFlowEvent
 from omega.domain.models import decimal
-from omega.infrastructure.auxiliary_store import AUXILIARY_HISTORY_BATCH_SIZE
+from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
 from omega.infrastructure.binance.vision import DAY
 from omega.runtime.settings import atomic_json
 
@@ -329,10 +329,10 @@ class DailyAuxiliaryHistory:
         observations, verified = result
         written = 0
         # Keep the day checkpoint behind all committed chunks. A retry retains committed rows.
-        for offset in range(0, len(observations), AUXILIARY_HISTORY_BATCH_SIZE):
+        for offset in range(0, len(observations), AUXILIARY_BATCH_SIZE):
             if self.stop.is_set():
                 raise InterruptedError
-            batch = observations[offset : offset + AUXILIARY_HISTORY_BATCH_SIZE]
+            batch = observations[offset : offset + AUXILIARY_BATCH_SIZE]
             written += store.put_history_batch(instrument, batch)
         unresolved = max(0, (end - start) // interval - verified)
         if unresolved:

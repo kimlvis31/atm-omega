@@ -21,6 +21,7 @@ from omega.infrastructure.postgres.schema import verify_schema
 
 OBSERVATION_COLUMNS = CANDLE_COLUMNS + ",source,received_ms,raw,raw_source,raw_received_ms"
 MAX_SERIES_PAGE = 4096
+BAR_WRITE_BATCH_SIZE = 256
 
 
 def series_observation(series, row) -> SeriesObservation:
@@ -126,7 +127,7 @@ class PostgresBarSeriesStore:
             raise ProtocolError("bar does not match the registered series metadata")
         try:
             with self.connection.transaction():
-                return self._insert(observation)
+                return self._insert_batch((observation,))[0][0]
         except self._database_error:
             raise StorageError("bar commit failed; retry with the same series and time") from None
 
@@ -134,7 +135,7 @@ class PostgresBarSeriesStore:
         if (
             not isinstance(series, BarSeries)
             or type(observations) is not tuple
-            or not 1 <= len(observations) <= 256
+            or not 1 <= len(observations) <= BAR_WRITE_BATCH_SIZE
             or any(
                 not isinstance(row, SeriesObservation) or row.candle.series != series
                 for row in observations
@@ -148,7 +149,7 @@ class PostgresBarSeriesStore:
         try:
             with self.connection.transaction():
                 self.register(series)
-                return sum(self._insert(row) for row in observations)
+                return sum(inserted for inserted, _ in self._insert_batch(observations))
         except self._database_error:
             raise StorageError("base-bar batch failed; retry the same ordered batch") from None
 
@@ -177,8 +178,12 @@ class PostgresBarSeriesStore:
             self._live_series.add(series.series_id)
             while True:
                 with self.connection.transaction():
-                    start = self._lock_live_cursor(series)
-                    end = self._advance_committed_prefix(series, start, now_ms)
+                    owned = {series.series_id: series}
+                    cursors = self._lock_live_cursors(owned)
+                    ends = self._advance_committed_prefixes(
+                        owned, cursors, {series.series_id: now_ms}
+                    )
+                    start, end = cursors[series.series_id], ends[series.series_id]
                 if (
                     end == start
                     or series.schedule.contiguous_missing_range(end, now_ms, chunk=1) is None
@@ -188,101 +193,172 @@ class PostgresBarSeriesStore:
             raise self._storage_error(error, "live base-bar resume query failed") from None
 
     def put_live_observation(self, observation: SeriesObservation) -> bool:
-        if not isinstance(observation, SeriesObservation):
-            raise ValidationError("typed base-bar observation required")
-        series = observation.candle.series
-        if series.series_id not in self._live_series:
-            raise StorageError("this connection does not own the live base-bar series")
+        return self.put_live_batch((observation,))[0][0]
+
+    def put_live_batch(self, observations, *, missing_only=False):
+        if not 1 <= len(observations) <= BAR_WRITE_BATCH_SIZE or any(
+            not isinstance(row, SeriesObservation) for row in observations
+        ):
+            raise ValidationError("live write requires a bounded batch of typed bars")
+        series_by_id, received_by_id = {}, {}
+        for row in observations:
+            series = row.candle.series
+            series_id = series.series_id
+            if series_id not in self._live_series:
+                raise StorageError("this connection does not own the live base-bar series")
+            series_by_id[series_id] = series
+            received_by_id[series_id] = max(received_by_id.get(series_id, 0), row.received_at_ms)
         try:
             with self.connection.transaction():
-                cursor = self._lock_live_cursor(series)
-                inserted = self._insert(observation)
-                self._advance_committed_prefix(series, cursor, observation.received_at_ms)
-                return inserted
+                cursors = self._lock_live_cursors(series_by_id)
+                result = self._insert_batch(observations, missing_only=missing_only)
+                self._advance_committed_prefixes(series_by_id, cursors, received_by_id)
+            return result
         except self._database_error as error:
-            raise self._storage_error(error, "live base-bar commit failed") from None
+            raise self._storage_error(error, "live base-bar batch commit failed") from None
 
-    def _lock_live_cursor(self, series: BarSeries) -> int:
-        row = self.connection.execute(
-            "SELECT next_ms FROM market.series_live_cursor WHERE series_id=%s FOR UPDATE",
-            (series.series_id,),
-        ).fetchone()
-        if (
-            row is None
-            or row[0] < series.effective_from_ms
+    def _lock_live_cursors(self, series_by_id):
+        rows = self.connection.execute(
+            "SELECT series_id,next_ms FROM market.series_live_cursor "
+            "WHERE series_id=ANY(%s::text[]) ORDER BY series_id FOR UPDATE",
+            (list(series_by_id),),
+        ).fetchall()
+        cursors = dict(rows)
+        if cursors.keys() != series_by_id.keys() or any(
+            not bar_time(cursor)
             or not (
-                series.schedule.contains_open(row[0]) or series.schedule.is_terminal_cursor(row[0])
+                series_by_id[series_id].schedule.contains_open(cursor)
+                or series_by_id[series_id].schedule.is_terminal_cursor(cursor)
             )
+            for series_id, cursor in rows
         ):
             raise ProtocolError("live base-bar cursor is missing or invalid")
-        return row[0]
+        return cursors
 
-    def _advance_committed_prefix(self, series: BarSeries, cursor: int, as_of_ms: int) -> int:
-        # Limit each scan and transaction, including when a staged history is already present.
-        window = series.schedule.contiguous_missing_range(cursor, as_of_ms, chunk=256)
-        if window is None:
-            return cursor
+    def _advance_committed_prefixes(self, series_by_id, cursors, received_by_id):
+        # Bound each series scan even if a large amount of future history is already staged.
+        windows = []
+        for series_id, cursor in cursors.items():
+            as_of_ms = received_by_id[series_id]
+            window = series_by_id[series_id].schedule.contiguous_missing_range(
+                cursor, as_of_ms, chunk=BAR_WRITE_BATCH_SIZE
+            )
+            if window is not None:
+                lower, upper = (EPOCH + timedelta(milliseconds=value) for value in window)
+                windows.append((series_id, lower, upper, as_of_ms))
+        positions = dict(cursors)
+        if not windows:
+            return positions
+
         rows = self.connection.execute(
-            "SELECT open_time FROM market.series_candles "
-            "WHERE series_id=%s AND open_time >= %s AND open_time < %s AND received_ms <= %s "
-            "ORDER BY open_time LIMIT 256",
-            (
-                series.series_id,
-                *(EPOCH + timedelta(milliseconds=value) for value in window),
-                as_of_ms,
-            ),
-        )
-        next_ms = cursor
-        for (opened,) in rows:
-            if opened != EPOCH + timedelta(milliseconds=next_ms):
-                break
-            next_ms = (
-                series.schedule.next_expected(next_ms) or next_ms + series.schedule.interval_ms
-            )
-        if next_ms != cursor:
-            self.connection.execute(
-                "UPDATE market.series_live_cursor SET next_ms=%s WHERE series_id=%s",
-                (next_ms, series.series_id),
-            )
-        return next_ms
+            """
+            SELECT target.series_id,bar.open_time FROM unnest(
+                %s::text[], %s::timestamptz[], %s::timestamptz[], %s::bigint[]
+            ) AS target(series_id,low,high,as_of_ms)
+            CROSS JOIN LATERAL (
+                SELECT open_time FROM market.series_candles
+                WHERE series_id=target.series_id AND open_time>=target.low AND open_time<target.high
+                  AND received_ms<=target.as_of_ms
+                ORDER BY open_time LIMIT %s
+            ) AS bar
+            ORDER BY target.series_id,bar.open_time
+            """,
+            (*map(list, zip(*windows, strict=True)), BAR_WRITE_BATCH_SIZE),
+        ).fetchall()
+        for series_id, opened in rows:
+            cursor = positions[series_id]
+            if opened == EPOCH + timedelta(milliseconds=cursor):
+                schedule = series_by_id[series_id].schedule
+                positions[series_id] = (
+                    schedule.next_expected(cursor) or cursor + schedule.interval_ms
+                )
 
-    def _insert(self, observation: SeriesObservation) -> bool:
+        updates = [
+            (series_id, stamp)
+            for series_id, stamp in positions.items()
+            if stamp != cursors[series_id]
+        ]
+        if updates:
+            self.connection.execute(
+                """
+                UPDATE market.series_live_cursor AS cursor SET next_ms=batch.next_ms
+                FROM unnest(%s::text[], %s::bigint[]) AS batch(series_id,next_ms)
+                WHERE cursor.series_id=batch.series_id
+                """,
+                tuple(map(list, zip(*updates, strict=True))),
+            )
+        return positions
+
+    @staticmethod
+    def _insert_values(observation):
         candle = observation.candle
-        opened = EPOCH + timedelta(milliseconds=candle.open_time_ms)
-        key = (candle.series.series_id, opened)
-        inserted = self.connection.execute(
-            "INSERT INTO market.series_candles "
-            "(series_id," + OBSERVATION_COLUMNS + ") "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-            "ON CONFLICT (series_id,open_time) DO NOTHING RETURNING series_id",
-            (
-                *key,
-                EPOCH + timedelta(milliseconds=candle.close_time_ms),
-                candle.open,
-                candle.high,
-                candle.low,
-                candle.close,
-                candle.volume,
-                observation.source,
-                observation.received_at_ms,
-                observation.raw,
-                observation.raw_source,
-                observation.raw_received_at_ms,
-            ),
-        ).fetchone()
-        if inserted is not None:
-            return True
-        row = self.connection.execute(
-            f"SELECT {OBSERVATION_COLUMNS} FROM market.series_candles "
-            "WHERE series_id=%s AND open_time=%s FOR UPDATE",
-            key,
-        ).fetchone()
-        if row is None:
-            raise ProtocolError("existing bar disappeared during its commit")
-        previous = series_observation(candle.series, row)
-        if previous.candle != candle:
-            raise ProtocolError("conflicting base-bar observation; original retained")
-        return False
+        return (
+            candle.series.series_id,
+            EPOCH + timedelta(milliseconds=candle.open_time_ms),
+            EPOCH + timedelta(milliseconds=candle.close_time_ms),
+            candle.open,
+            candle.high,
+            candle.low,
+            candle.close,
+            candle.volume,
+            observation.source,
+            observation.received_at_ms,
+            observation.raw,
+            observation.raw_source,
+            observation.raw_received_at_ms,
+        )
+
+    def _insert_batch(self, observations, *, missing_only=False):
+        values = [self._insert_values(row) for row in observations]
+        # Group identical keys before INSERT. Keep the first transport receipt.
+        first_by_key = {}
+        for row in values:
+            first_by_key.setdefault(row[:2], row)
+        ordered_rows = [first_by_key[key] for key in sorted(first_by_key)]
+        inserted = set(
+            self.connection.execute(
+                f"""
+                INSERT INTO market.series_candles (series_id,{OBSERVATION_COLUMNS})
+                SELECT * FROM unnest(
+                    %s::text[], %s::timestamptz[], %s::timestamptz[],
+                    %s::numeric[], %s::numeric[], %s::numeric[], %s::numeric[], %s::numeric[],
+                    %s::text[], %s::bigint[], %s::bytea[], %s::text[], %s::bigint[]
+                )
+                ON CONFLICT (series_id,open_time) DO NOTHING RETURNING series_id,open_time
+                """,
+                tuple(map(list, zip(*ordered_rows, strict=True))),
+            ).fetchall()
+        )
+        existing = {}
+        conflicts = sorted(first_by_key.keys() - inserted)
+        if conflicts:
+            # A fresh statement sees concurrent commits that caused ON CONFLICT to skip.
+            columns = ",".join(f"bar.{name}" for name in OBSERVATION_COLUMNS.split(","))
+            rows = self.connection.execute(
+                f"""
+                SELECT bar.series_id,{columns}
+                FROM unnest(%s::text[], %s::timestamptz[]) AS keys(series_id,open_time)
+                JOIN market.series_candles AS bar USING (series_id,open_time)
+                ORDER BY bar.series_id,bar.open_time FOR UPDATE OF bar
+                """,
+                tuple(map(list, zip(*conflicts, strict=True))),
+            ).fetchall()
+            existing = {row[:2]: row[1:] for row in rows}
+            if len(existing) != len(conflicts):
+                raise ProtocolError("existing bar disappeared during its commit")
+        result, committed = [], {}
+        for observation, row in zip(observations, values, strict=True):
+            key = row[:2]
+            is_new = key in inserted and key not in committed
+            if is_new:
+                committed[key] = observation.candle
+            elif key not in committed:
+                committed[key] = series_observation(observation.candle.series, existing[key]).candle
+            accepted = committed[key]
+            if accepted != observation.candle and not missing_only:
+                raise ProtocolError("conflicting base-bar observation; original retained")
+            result.append((is_new, accepted))
+        return result
 
     def read_observations(
         self,

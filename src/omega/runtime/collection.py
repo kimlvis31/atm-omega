@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 
 from omega.application.collection import MinuteCollector
 from omega.domain.errors import ProtocolError, RateLimited, TransportError, ValidationError
+from omega.infrastructure.bar_series_store import BAR_WRITE_BATCH_SIZE
 from omega.infrastructure.binance.streams import StreamPlan, connect_minutes
 from omega.ports.brokers import MarketData
 from omega.ports.collection import MinuteObservation, accept_rest_observations
@@ -45,6 +46,7 @@ class CollectionWorker:
         capture_rest_raw: bool = False,
         repair_grace_ms: int = 0,
         on_rest_throttle: Callable[[float], None] | None = None,
+        stream_batch_seconds: float = 0,
         on_protection=None,
         protection_generation=None,
         on_protection_state=None,
@@ -55,6 +57,8 @@ class CollectionWorker:
             raise ValidationError("invalid collection deadlines")
         if not 0 < repair_interval_seconds <= 60:
             raise ValidationError("invalid repair interval")
+        if not 0 <= stream_batch_seconds <= 5:
+            raise ValidationError("invalid stream batch timeout")
         if type(repair_grace_ms) is not int or not 0 <= repair_grace_ms < 60_000:
             raise ValidationError("invalid REST repair grace")
         if (
@@ -81,6 +85,10 @@ class CollectionWorker:
         self.capture_rest_raw = capture_rest_raw
         self.repair_grace_ms = repair_grace_ms
         self.on_rest_throttle = on_rest_throttle
+        self.stream_batch_seconds = stream_batch_seconds
+        self._stream_batch = []
+        self._flush_at = None
+        self._stream_commit_failed = False
         self.plan, self.history, self.collector = plan, history, collector
         self.connect, self.clock_ms = connect, clock_ms
         self.idle_seconds, self.session_seconds = idle_seconds, session_seconds
@@ -128,28 +136,31 @@ class CollectionWorker:
                     observations = accept_rest_observations(
                         rows, instrument, start, end, accepted_at, require_raw=self.capture_rest_raw
                     )
-                    before = self.collector.cursor[instrument]
-                    for index, observation in enumerate(
-                        sorted(observations, key=lambda o: o.candle.open_time_ms)
-                    ):
-                        self.collector.accept(observation, now_ms=accepted_at, **repair_options)
-                        if index % 16 == 15:
-                            await asyncio.sleep(0)
                 else:
+                    rows = tuple(rows)
                     for candle in rows:
                         if (
                             candle.instrument != instrument
                             or not start <= candle.open_time_ms < end
                         ):
                             raise ProtocolError("history returned an out-of-range minute")
-                    before = self.collector.cursor[instrument]
                     accepted_at = self.clock_ms() if self.repair_grace_ms else now
-                    for index, candle in enumerate(sorted(rows, key=lambda c: c.open_time_ms)):
-                        self.collector.accept(
-                            MinuteObservation(candle, "rest", accepted_at),
+                    observations = (
+                        MinuteObservation(candle, "rest", accepted_at) for candle in rows
+                    )
+                before = self.collector.cursor[instrument]
+                ordered = sorted(observations, key=lambda row: row.candle.open_time_ms)
+                if self.stream_batch_seconds:
+                    for offset in range(0, len(ordered), BAR_WRITE_BATCH_SIZE):
+                        self.collector.accept_batch(
+                            ordered[offset : offset + BAR_WRITE_BATCH_SIZE],
                             now_ms=accepted_at,
                             **repair_options,
                         )
+                        await asyncio.sleep(0)
+                else:
+                    for index, observation in enumerate(ordered):
+                        self.collector.accept(observation, now_ms=accepted_at, **repair_options)
                         if index % 16 == 15:
                             await asyncio.sleep(0)
                 if self.collector.cursor[instrument] == before:
@@ -286,6 +297,8 @@ class CollectionWorker:
     def _protection_timeout(self, idle_deadline):
         now, monotonic = self.clock_ms(), self.monotonic()
         delays = [max(0, idle_deadline - monotonic)]
+        if self._flush_at is not None:
+            delays.append(max(0, self._flush_at - monotonic))
         for rows in self._protection_pending.values():
             head = rows[0]
             delays.append(
@@ -296,6 +309,21 @@ class CollectionWorker:
     def _start_repair(self):
         if self._repair_task is None and self.monotonic() >= self._next_repair:
             self._repair_task = asyncio.create_task(self.repair())
+
+    def _flush_stream(self):
+        if not self._stream_batch:
+            return
+        # A failed commit is recovered from the durable cursor by the owner.
+        # Do not consume the batch or attempt to acknowledge it in session cleanup.
+        self._stream_commit_failed = True
+        self.collector.accept_batch(
+            self._stream_batch,
+            now_ms=max(row.received_at_ms for row in self._stream_batch),
+        )
+        self._stream_commit_failed = False
+        self._stream_batch.clear()
+        self._flush_at = None
+        self.health("gap")
 
     async def _protection_stream(self, socket):
         """One owned recv task; timer wakes do not renew the socket idle deadline."""
@@ -308,6 +336,8 @@ class CollectionWorker:
 
         try:
             while True:
+                if self._flush_at is not None and self.monotonic() >= self._flush_at:
+                    self._flush_stream()
                 self._drain_protection()
                 if receiver is None:
                     receiver = asyncio.create_task(receive())
@@ -368,6 +398,8 @@ class CollectionWorker:
             if receiver is not None:
                 receiver.cancel()
                 await asyncio.gather(receiver, return_exceptions=True)
+            if not self._stream_commit_failed:
+                self._flush_stream()
 
     async def accept_stream(self, raw, *, received_at_ms):
         """Wait for a slightly early closed frame; never publish a future minute.
@@ -399,7 +431,14 @@ class CollectionWorker:
             raw_source="websocket",
             raw_received_at_ms=received_at_ms,
         )
-        self.collector.accept(accepted, now_ms=now)
+        if self.stream_batch_seconds:
+            if not self._stream_batch:
+                self._flush_at = self.monotonic() + self.stream_batch_seconds
+            self._stream_batch.append(accepted)
+            if len(self._stream_batch) == BAR_WRITE_BATCH_SIZE:
+                self._flush_stream()
+        else:
+            self.collector.accept(accepted, now_ms=now)
         return accepted
 
     async def session(self) -> None:

@@ -247,7 +247,11 @@ async def collect(args) -> None:
                 )
 
             repair_options = (
-                {"repair_grace_ms": 5_000, "on_rest_throttle": rest_throttle}
+                {
+                    "repair_grace_ms": 5_000,
+                    "on_rest_throttle": rest_throttle,
+                    "stream_batch_seconds": 0.2,
+                }
                 if native_series is not None
                 else {}
             )

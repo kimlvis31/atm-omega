@@ -580,3 +580,20 @@ def test_auxiliary_ranges_share_one_snapshot_while_another_owner_repairs(
     finally:
         changed.set()
         store.connection = connection
+
+
+def test_stream_auxiliary_batch_preserves_first_receipt_and_revises_changed_metrics(
+    store, instrument
+):
+    trade = observation()
+    statistic = observation(channel="open_interest", values=(("METRIC_OPENINTEREST", 1),))
+    assert store.put_live_batch([(instrument, trade), (instrument, statistic)]) == 2
+    duplicate = replace(trade, available_at_ms=trade.available_at_ms + 1)
+    unchanged = replace(statistic, available_at_ms=statistic.available_at_ms + 1)
+    corrected = replace(unchanged, values=(("METRIC_OPENINTEREST", 2),))
+    assert store.put_live_batch([(instrument, duplicate), (instrument, unchanged)]) == 0
+    assert store.put_live_batch([(instrument, corrected)]) == 1
+    assert read(store, instrument, duplicate).observation == trade
+    assert read(store, instrument, statistic).observation == statistic
+    assert read(store, instrument, corrected).observation == corrected
+    assert store.put_live_batch([(instrument, corrected)]) == 0

@@ -855,6 +855,56 @@ def test_native_minute_cursor_never_advances_past_rolled_back_write(settings, in
         contender.close()
 
 
+def test_native_batch_conflict_rolls_back_insert_and_cursor(settings, instrument):
+    opened = 1_700_000_040_000
+    minute = 60_000
+    series = BarSeries(instrument, "binance-public", (minute,), BarSchedule(), opened)
+    store = PostgresBarSeriesStore(settings)
+    price = decimal("100")
+    first = SeriesObservation(
+        SeriesCandle(series, opened, opened + minute, price, price, price, price, price),
+        "websocket",
+        opened + minute + 1,
+    )
+    second = replace(
+        first,
+        candle=replace(
+            first.candle, open_time_ms=opened + minute, close_time_ms=opened + 2 * minute
+        ),
+        received_at_ms=opened + 2 * minute + 1,
+    )
+    conflict = replace(first, candle=replace(first.candle, volume=decimal("99")))
+    try:
+        assert store.claim_live_series(series, first.received_at_ms) == opened
+        assert store.put_live_observation(first)
+        with pytest.raises(ProtocolError, match="conflicting base-bar"):
+            store.put_live_batch((second, conflict))
+        assert store.connection.execute(
+            "SELECT next_ms FROM market.series_live_cursor WHERE series_id=%s", (series.series_id,)
+        ).fetchone() == (opened + minute,)
+        assert (
+            store.read_observations(
+                series.series_id,
+                opened + minute,
+                opened + 2 * minute,
+                as_of_ms=second.received_at_ms,
+                limit=1,
+                include_raw=False,
+            )
+            == ()
+        )
+        assert store.put_live_batch((second, conflict), missing_only=True) == [
+            (True, second.candle),
+            (False, first.candle),
+        ]
+        assert store.put_live_batch((first, second)) == [
+            (False, first.candle),
+            (False, second.candle),
+        ]
+    finally:
+        store.close()
+
+
 def test_native_collector_recovers_a_lost_db_session_without_rebinding_api(
     settings, instrument, tmp_path, monkeypatch, capsys
 ):
