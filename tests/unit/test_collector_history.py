@@ -236,3 +236,31 @@ def test_backfill_keeps_valid_archive_bars_around_noncanonical_source_minute():
     saved = subject.closed_observations(INSTRUMENT, start, end, now_ms=end)
     assert [value.candle.open_time_ms for value in saved] == [start, start + 2 * MINUTE]
     assert rejected == [(INSTRUMENT, start + MINUTE, start + MINUTE + 1, 2)]
+
+
+def test_backfill_plan_requests_only_uncovered_minutes():
+    from omega.runtime.collector_aux_history import MINUTE
+
+    start = 86_400_000
+    end = start + 4 * MINUTE
+
+    class Database:
+        def execute(self, query, parameters):
+            assert "market.collector_coverage" in query
+            assert parameters == ("series", start)
+            return self
+
+        def fetchone(self):
+            return (
+                [
+                    SimpleNamespace(lower=start, upper=start + MINUTE),
+                    SimpleNamespace(lower=start + 2 * MINUTE, upper=start + 3 * MINUTE),
+                ],
+            )
+
+    owner = HistoryWorker.__new__(HistoryWorker)
+    assert owner._day_plan(Database(), "series", start, end) == (
+        end,
+        {start, start + 2 * MINUTE},
+        [(start + MINUTE, start + 2 * MINUTE), (start + 3 * MINUTE, end)],
+    )

@@ -58,6 +58,17 @@ Coverage is updated once per insert statement in the same transaction as the row
 The recent trade repair selects candidates from the range difference, then reads
 only the relevant candle volumes.
 
+The collector owns Binance REST, Vision, WebSocket subscriptions and observation
+aggregation. The data manager owns range planning, PostgreSQL writes, checkpoint
+updates and the committed read API. They exchange bounded frames over private
+Unix sockets in the shared runtime directory. A live ingest reply is sent after
+its DB transaction commits. The data manager submits up to OMEGA_VISION_WORKERS
+candle fetches at a time. Vision workers share the provider cooldown state.
+
+When replacing an installation with the former history service, stop the old
+collector and history before starting collector and data_manager. The existing
+volume, original series boundaries, inventory, and checkpoints are reused.
+
 The checkout lives on the deployment host's Desktop. Keep the original
 series boundary in `state/kbeeshome-collector/deploy.env` as
 `OMEGA_EFFECTIVE_FROM_MS`. The runtime database configuration belongs at
@@ -74,7 +85,7 @@ git pull --ff-only
 docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collector/compose.yaml up -d --wait postgres
 docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collector/compose.yaml build collector
 docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collector/compose.yaml run --rm --no-deps --entrypoint python collector -I -B -m omega.runtime.database_cli --root /run/omega status
-docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collector/compose.yaml up -d collector history
+docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collector/compose.yaml up -d collector data_manager
 ```
 
 For a fresh database, use `migrate` instead of `status`. For an existing

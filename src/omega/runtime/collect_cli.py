@@ -37,6 +37,8 @@ def parser() -> argparse.ArgumentParser:
         help="Repeat to collect Spot and USD-M Futures in a single process",
     )
     result.add_argument("--symbols", nargs="+", help="One or more symbols with --market")
+    result.add_argument("--fetch-workers", type=int, default=12)
+    result.add_argument("--ipc-root", type=Path, help="Use the standalone data manager")
     result.add_argument("--db-config", type=Path, default=Path("database.config.toml"))
     result.add_argument("--request-budget-file", type=Path, help="Shared local REST budget file")
     start = result.add_mutually_exclusive_group()
@@ -134,6 +136,7 @@ async def collect(args) -> None:
     ):
         raise ValidationError("raw directory must be a local filesystem path")
     archive = None
+    ipc_root = getattr(args, "ipc_root", None)
     plans = _stream_plans(args)
     instruments = tuple(instrument for plan in plans for instrument in plan.instruments)
     lookback = getattr(args, "lookback_minutes", None)
@@ -148,7 +151,9 @@ async def collect(args) -> None:
         )
     now = time.time_ns() // 1_000_000
     effective = getattr(args, "series_effective_from_ms", None)
-    settings = load_database_settings(args.db_config)
+    if ipc_root is not None and (effective is None or getattr(args, "api_port", None) is not None):
+        raise ValidationError("split collection requires a fixed series and the data manager API")
+    settings = load_database_settings(args.db_config) if ipc_root is None else None
     store = None
     native_series = None
     if effective is None:
@@ -175,7 +180,20 @@ async def collect(args) -> None:
             asyncio.get_running_loop().add_signal_handler(sig, stop.set)
         except NotImplementedError:
             pass  # Windows asyncio.run handles KeyboardInterrupt and cancels cleanly.
+    from contextlib import ExitStack
+
+    socket_stack = ExitStack()
     try:
+        if ipc_root is not None:
+            from omega.runtime.market_history_fetch import MarketHistoryFetch
+            from omega.runtime.market_ipc import serve_market_socket
+
+            fetch = MarketHistoryFetch(ipc_root, instruments, stop)
+            socket_stack.enter_context(
+                serve_market_socket(
+                    ipc_root / "ipc" / "market.sock", fetch.dispatch, capacity=args.fetch_workers
+                )
+            )
         if getattr(args, "api_port", None) is not None:
             token = read_api_token(args.api_token_file)
             ready = {"api_ready": True}
@@ -282,9 +300,17 @@ async def collect(args) -> None:
         if getattr(args, "collect_auxiliary", False):
             from omega.runtime.collect_aux_live import LiveAuxiliary
 
-            auxiliary_task = asyncio.create_task(
-                LiveAuxiliary(settings, clients).run(instruments, stop)
-            )
+            if ipc_root is None:
+                auxiliary = LiveAuxiliary(settings, clients)
+            else:
+                from omega.runtime.collector_data_manager import DatabaseAuxiliarySink
+
+                auxiliary = LiveAuxiliary(
+                    settings,
+                    clients,
+                    store_factory=lambda: DatabaseAuxiliarySink(ipc_root / "ipc" / "database.sock"),
+                )
+            auxiliary_task = asyncio.create_task(auxiliary.run(instruments, stop))
             auxiliary_task.add_done_callback(lambda task: stop.set())
 
         if native_series is None:
@@ -293,9 +319,15 @@ async def collect(args) -> None:
             from omega.infrastructure.binance_series_minutes import BinanceMinuteSeriesStore
 
             async def run_native():
-                with closing(
-                    BinanceMinuteSeriesStore(settings, native_series, time.time_ns() // 1_000_000)
-                ) as active_store:
+                if ipc_root is None:
+                    active = BinanceMinuteSeriesStore(
+                        settings, native_series, time.time_ns() // 1_000_000
+                    )
+                else:
+                    from omega.runtime.collector_data_manager import DatabaseBarSink
+
+                    active = DatabaseBarSink(ipc_root / "ipc" / "database.sock", instruments)
+                with closing(active) as active_store:
                     await run_workers(active_store, active_store.starts)
 
             await _retry_native_storage(run_native, stop, health)
@@ -316,8 +348,12 @@ async def collect(args) -> None:
                     if source is not None:
                         source.close()
                 finally:
-                    if store is not None:
-                        store.close()
+                    try:
+                        if store is not None:
+                            store.close()
+                    finally:
+                        stop.set()
+                        socket_stack.close()
 
 
 async def _retry_native_storage(run_native, stop, health):
@@ -343,6 +379,8 @@ def main(argv=None) -> None:
         return
     arguments = parser()
     args = arguments.parse_args(argv)
+    if not 1 <= args.fetch_workers <= 24:
+        arguments.error("--fetch-workers must be 1..24")
     if args.raw_directory is not None and not args.capture_rest_raw:
         arguments.error("--raw-directory requires --capture-rest-raw")
     if (args.api_port is None) != (args.api_token_file is None):

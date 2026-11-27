@@ -112,8 +112,8 @@ class TradeMinute:
 
 
 class LiveAuxiliary:
-    def __init__(self, settings, clients):
-        self.settings = settings
+    def __init__(self, settings, clients, *, store_factory=None):
+        self.store_factory = store_factory or (lambda: PostgresAuxiliaryStore(settings))
         self.clients = clients
         self.api = {
             market: BinanceAuxiliaryClient(market, client) for market, client in clients.items()
@@ -133,7 +133,7 @@ class LiveAuxiliary:
     def _put_batch(self, batch):
         try:
             if self.store is None:
-                self.store = PostgresAuxiliaryStore(self.settings)
+                self.store = self.store_factory()
             return self.store.put_live_batch(batch)
         except StorageError:
             self._close()

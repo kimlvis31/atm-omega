@@ -37,21 +37,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    secrets: [db_app_password, api_token]
     volumes:
       - ../../state/kbeeshome-collector:/run/omega
     command:
       - --collect-auxiliary
-      - --db-config
-      - /run/omega/database.config.toml
+      - --fetch-workers
+      - '${OMEGA_VISION_WORKERS:-12}'
+      - --ipc-root
+      - /run/omega
       - --request-budget-file
       - /run/omega/binance-public-budget.json
       - --series-effective-from-ms
       - "${OMEGA_EFFECTIVE_FROM_MS:?Set the original series effective time}"
-      - --api-port
-      - "${OMEGA_LIVE_API_PORT:-18766}"
-      - --api-token-file
-      - /run/secrets/api_token
       - --subscription
       - spot:BTCUSDT
       - --subscription
@@ -96,18 +93,28 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
 
-  history:
+  data_manager:
     image: atm-omega-collector-live-collector
     network_mode: host
     restart: "on-failure:5"
     depends_on:
       postgres:
         condition: service_healthy
-    secrets: [db_app_password]
+    secrets: [db_app_password, api_token]
     volumes:
       - ../../state/kbeeshome-collector:/run/omega
-    entrypoint: [python, -I, -B, -m, omega.runtime.collector_history]
-    command: [--root, /run/omega]
+    entrypoint: [python, -I, -B, -m, omega.runtime.collector_data_manager]
+    command:
+      - --root
+      - /run/omega
+      - --fetch-workers
+      - '${OMEGA_VISION_WORKERS:-12}'
+      - --effective-from-ms
+      - "${OMEGA_EFFECTIVE_FROM_MS:?Set the original series effective time}"
+      - --api-port
+      - "${OMEGA_LIVE_API_PORT:-18766}"
+      - --api-token-file
+      - /run/secrets/api_token
     logging:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}

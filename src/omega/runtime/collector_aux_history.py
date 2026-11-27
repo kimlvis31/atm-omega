@@ -80,61 +80,12 @@ def depth_fields(rows):
         return fields, Decimal(len(fields)) / 12
 
 
-class DailyAuxiliaryHistory:
-    def __init__(self, root, vision, clients, *, clock_ms, stop):
-        self.root, self.vision, self.clients = root, vision, clients
+class HistoricalAuxiliaryFetch:
+    def __init__(self, vision, clients, *, clock_ms, stop):
+        self.vision, self.clients = vision, clients
         self.clock_ms, self.stop = clock_ms, stop
-        self.path = root / "auxiliary-history-progress.json"
-        self.progress = {}
-        if self.path.exists():
-            if self.path.stat().st_size > 1_048_576:
-                raise StorageError("auxiliary history progress exceeds its bound")
-            state = json.loads(self.path.read_text(encoding="utf-8"))
-            if state.get("version") != 1 or not isinstance(state.get("jobs"), dict):
-                raise StorageError("invalid auxiliary history checkpoint")
-            self.progress = state["jobs"]
 
-    def _save(self):
-        atomic_json(self.path, {"version": 1, "jobs": self.progress})
-
-    @staticmethod
-    def _end(db, instrument, channel):
-        # Historical depth has its own provenance. Streaming snapshots are the boundary.
-        sources = {
-            "agg_trade": (instrument.key + ":aggTrade",),
-            "metrics": tuple(
-                instrument.key + ":" + key for key in ("open_interest_history", "long_short_ratio")
-            ),
-            "depth": (instrument.key + ":binance_depth_ws_v1",),
-        }[channel]
-        native_channel = "trade_flow" if channel == "agg_trade" else channel
-        if channel == "metrics":
-            available = [
-                first_covered(db, instrument.key, name, (source,))
-                for name, source in zip(("open_interest", "long_short_ratio"), sources, strict=True)
-            ]
-            return None if None in available else max(available)
-        return first_covered(db, instrument.key, native_channel, sources)
-
-    def _trade_day(self, db, instrument, start, end):
-        checkpoint = db.execute(
-            """SELECT historical_series_id,next_ms,end_ms,mirror_ms
-               FROM market.binance_kline_history WHERE instrument=%s""",
-            (instrument.key,),
-        ).fetchone()
-        if checkpoint is None:
-            return None
-        series, next_ms, live_start, mirror = checkpoint
-        if next_ms < min(end, live_start) or (end > live_start and mirror < end):
-            return None
-        volumes = dict(
-            db.execute(
-                """SELECT (extract(epoch FROM open_time)*1000)::bigint,v
-               FROM market.series_candles WHERE series_id=%s
-                 AND open_time>=to_timestamp(%s/1000) AND open_time<to_timestamp(%s/1000)""",
-                (series, start, end),
-            ).fetchall()
-        )
+    def trade_day(self, instrument, start, end, volumes):
         observations, complete, seen = [], 0, set()
         rows = self.vision.iter_rows(instrument, "agg_trade", start, end)
         for opening, group in groupby(rows, key=lambda row: row.timestamp_ms // MINUTE * MINUTE):
@@ -189,7 +140,7 @@ class DailyAuxiliaryHistory:
             complete += 1
         return observations, complete
 
-    def _depth_day(self, instrument, start, end):
+    def depth_day(self, instrument, start, end):
         observations, complete = [], 0
         rows = self.vision.iter_rows(instrument, "depth", start, end)
         for opening, group in groupby(rows, key=lambda row: row.timestamp_ms // MINUTE * MINUTE):
@@ -234,7 +185,7 @@ class DailyAuxiliaryHistory:
             source=instrument.key + ":" + suffix,
         )
 
-    def _metric_day(self, instrument, start, end, from_archive):
+    def metric_day(self, instrument, start, end, from_archive):
         observations = []
         matched = {"open_interest": set(), "long_short_ratio": set()}
         if from_archive:
@@ -294,7 +245,79 @@ class DailyAuxiliaryHistory:
                     matched[channel].add(row.event_time_ms)
         return observations, len(matched["open_interest"] & matched["long_short_ratio"])
 
-    def step(self, db, store, instrument, channel, first):
+
+class DailyAuxiliaryHistory:
+    def __init__(self, root, vision, clients, *, clock_ms, stop, fetch=None):
+        self.root, self.remote = root, fetch is not None
+        self.fetch = fetch or HistoricalAuxiliaryFetch(
+            vision, clients, clock_ms=clock_ms, stop=stop
+        )
+        self.vision = vision if fetch is None else fetch
+        self.clock_ms, self.stop = clock_ms, stop
+        self.path = root / "auxiliary-history-progress.json"
+        self.progress = {}
+        if self.path.exists():
+            if self.path.stat().st_size > 1_048_576:
+                raise StorageError("auxiliary history progress exceeds its bound")
+            state = json.loads(self.path.read_text(encoding="utf-8"))
+            if state.get("version") != 1 or not isinstance(state.get("jobs"), dict):
+                raise StorageError("invalid auxiliary history checkpoint")
+            self.progress = state["jobs"]
+
+    def _save(self):
+        atomic_json(self.path, {"version": 1, "jobs": self.progress})
+
+    @staticmethod
+    def _end(db, instrument, channel):
+        # Historical depth has its own provenance. Streaming snapshots are the boundary.
+        sources = {
+            "agg_trade": (instrument.key + ":aggTrade",),
+            "metrics": tuple(
+                instrument.key + ":" + key for key in ("open_interest_history", "long_short_ratio")
+            ),
+            "depth": (instrument.key + ":binance_depth_ws_v1",),
+        }[channel]
+        native_channel = "trade_flow" if channel == "agg_trade" else channel
+        if channel == "metrics":
+            available = [
+                first_covered(db, instrument.key, name, (source,))
+                for name, source in zip(("open_interest", "long_short_ratio"), sources, strict=True)
+            ]
+            return None if None in available else max(available)
+        return first_covered(db, instrument.key, native_channel, sources)
+
+    def _trade_reference(self, db, instrument, start, end):
+        checkpoint = db.execute(
+            """SELECT historical_series_id,next_ms,end_ms,mirror_ms
+               FROM market.binance_kline_history WHERE instrument=%s""",
+            (instrument.key,),
+        ).fetchone()
+        if checkpoint is None:
+            return None
+        series, next_ms, live_start, mirror = checkpoint
+        if next_ms < min(end, live_start) or (end > live_start and mirror < end):
+            return None
+        volumes = dict(
+            db.execute(
+                """SELECT (extract(epoch FROM open_time)*1000)::bigint,v
+               FROM market.series_candles WHERE series_id=%s
+                 AND open_time>=to_timestamp(%s/1000) AND open_time<to_timestamp(%s/1000)""",
+                (series, start, end),
+            ).fetchall()
+        )
+        return volumes
+
+    def _trade_day(self, db, instrument, start, end):
+        volumes = self._trade_reference(db, instrument, start, end)
+        return None if volumes is None else self.fetch.trade_day(instrument, start, end, volumes)
+
+    def _depth_day(self, instrument, start, end):
+        return self.fetch.depth_day(instrument, start, end)
+
+    def _metric_day(self, instrument, start, end, from_archive):
+        return self.fetch.metric_day(instrument, start, end, from_archive)
+
+    def _plan(self, db, instrument, channel, first):
         now = self.clock_ms()
         job_key = instrument.key + "|" + channel
         job = self.progress.get(job_key)
@@ -302,7 +325,7 @@ class DailyAuxiliaryHistory:
         if job is None:
             cutoff = self._end(db, instrument, channel)
             if cutoff is None:
-                return False
+                return None
             job = {
                 "next_ms": first // interval * interval,
                 "end_ms": cutoff,
@@ -313,11 +336,86 @@ class DailyAuxiliaryHistory:
             self.progress[job_key] = job
             self._save()
         if job["next_ms"] >= job["end_ms"] or job.get("check_again_ms", 0) > now:
-            return False
+            return None
         start = job["next_ms"]
         end = min(job["end_ms"], (start // DAY + 1) * DAY)
-        archive = self.vision.files(instrument, channel, start, end)
-        from_rest = not archive and channel == "metrics" and start >= now - 27 * DAY
+        return job, start, end, interval
+
+    def _known_minutes(self, db, instrument, channel, start, end, step):
+        requested = {
+            "agg_trade": (("trade_flow", "aggTrade"),),
+            "depth": (("depth", DEPTH_SOURCE),),
+            "metrics": (
+                ("open_interest", "open_interest_history"),
+                ("long_short_ratio", "long_short_ratio"),
+            ),
+        }[channel]
+        present = set(range(start, end, step))
+        for native, suffix in requested:
+            row = db.execute(
+                "SELECT observed FROM market.collector_coverage "
+                "WHERE scope_key=%s AND channel=%s AND dataset=%s AND day_ms=%s",
+                (instrument.key, native, instrument.key + ":" + suffix, start // DAY * DAY),
+            ).fetchone()
+            if row is None:
+                return set()
+            covered = set()
+            for window in row[0]:
+                first = (max(start, window.lower) + step - 1) // step * step
+                covered.update(range(first, min(end, window.upper), step))
+            present.intersection_update(covered)
+        return present
+
+    def prepare(self, db, pool, instrument, channel, first):
+        plan = self._plan(db, instrument, channel, first)
+        if plan is None:
+            return None
+        _job, start, end, interval = plan
+        known = self._known_minutes(db, instrument, channel, start, end, interval)
+        if len(known) == len(range(start, end, interval)):
+            return known, None
+        volumes = (
+            self._trade_reference(db, instrument, start, end) if channel == "agg_trade" else None
+        )
+        if channel == "agg_trade" and volumes is None:
+            return None
+        return known, pool.submit(
+            self.fetch.day,
+            instrument,
+            channel,
+            start,
+            end,
+            channel == "metrics" and start >= self.clock_ms() - 27 * DAY,
+            volumes,
+            known,
+        )
+
+    def step(self, db, store, instrument, channel, first, *, prepared=None):
+        plan = self._plan(db, instrument, channel, first)
+        if plan is None:
+            return False
+        job, start, end, interval = plan
+        now = self.clock_ms()
+        if self.remote:
+            if prepared is None:
+                return False
+            known, pending = prepared
+            if pending is None:
+                archive, from_rest, result = True, False, ([], len(known))
+            else:
+                archive, from_rest, observations, verified = pending.result()
+                result = observations, verified + len(known)
+        else:
+            archive = self.vision.files(instrument, channel, start, end)
+            from_rest = not archive and channel == "metrics" and start >= now - 27 * DAY
+            if channel == "metrics" and (archive or from_rest):
+                result = self._metric_day(instrument, start, end, bool(archive))
+            elif archive and channel == "depth":
+                result = self._depth_day(instrument, start, end)
+            elif archive:
+                result = self._trade_day(db, instrument, start, end)
+            else:
+                result = ([], 0)
         if not archive:
             note_source_check(
                 db, instrument, channel, "vision", start, end, "unlisted", self.clock_ms()
@@ -326,14 +424,6 @@ class DailyAuxiliaryHistory:
             job.update(check_again_ms=now + 60 * MINUTE, state="waiting_archive")
             self._save()
             return False
-        if channel == "metrics" and (archive or from_rest):
-            result = self._metric_day(instrument, start, end, bool(archive))
-        elif archive and channel == "depth":
-            result = self._depth_day(instrument, start, end)
-        elif archive:
-            result = self._trade_day(db, instrument, start, end)
-        else:
-            result = ([], 0)
         if result is None:
             return False
         observations, verified = result

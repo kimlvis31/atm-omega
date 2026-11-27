@@ -1,16 +1,14 @@
 """Resume market history alongside the existing realtime collector."""
 
-import argparse
 import json
 import shutil
-import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from decimal import Decimal
 from hashlib import sha256
-from pathlib import Path
-from threading import Event
+from itertools import batched
 
 from psycopg.errors import QueryCanceled
 
@@ -27,27 +25,15 @@ from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
 from omega.infrastructure.bar_series_store import BAR_WRITE_BATCH_SIZE, PostgresBarSeriesStore
-from omega.infrastructure.binance.auxiliary_client import BinanceAuxiliaryClient
-from omega.infrastructure.binance.budget import RequestBudget, Window
-from omega.infrastructure.binance.client import BinanceClient
-from omega.infrastructure.binance.market import BinanceMarketData
-from omega.infrastructure.binance.shared_budget import SharedRequestBudget
-from omega.infrastructure.binance.transport import UrllibTransport
-from omega.infrastructure.binance.vision import DAY, VisionArchive
-from omega.infrastructure.binance.vision_market import VisionMarketData
+from omega.infrastructure.binance.vision import DAY
 from omega.infrastructure.candles import connect_database
 from omega.infrastructure.collector_coverage import (
     first_covered,
     note_source_check,
     recent_unconfirmed_trades,
 )
-from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import verify_schema
-from omega.infrastructure.raw_archive import FileRawArchive
-from omega.ports.raw_data import PublicRawResponse
-from omega.runtime.collect_cli import _CollectionTransport
 from omega.runtime.collector_aux_history import DailyAuxiliaryHistory
-from omega.runtime.control import InstanceLock
 from omega.runtime.settings import atomic_json
 
 MINUTE = 60_000
@@ -132,39 +118,12 @@ def discover(instrument, channel, rest, vision):
 
 
 class HistoryWorker:
-    def __init__(self, root, settings, inventory, stop):
+    def __init__(self, root, settings, inventory, stop, fetch, *, workers=12):
         self.root, self.settings, self.inventory, self.stop = root, settings, inventory, stop
-        budget = SharedRequestBudget(root / "binance-public-budget.json")
-        self.rest = {}
-        self.aux = {}
-        for market in {instrument.market for instrument in inventory}:
-            client = BinanceClient(
-                "https://api.binance.com" if market == Market.SPOT else "https://fapi.binance.com",
-                _CollectionTransport(UrllibTransport(), market),
-                budget=budget,
-            )
-            self.rest[market] = BinanceMarketData(market, client)
-            self.aux[market] = BinanceAuxiliaryClient(market, client)
-        self.vision = VisionArchive(root / "vision-history", paced=True, stop_requested=stop.is_set)
-        self.vision_market = {
-            market: VisionMarketData(rest, self.vision, on_unaligned_bar=self._unaligned_bar)
-            for market, rest in self.rest.items()
-        }
-        self.raw = FileRawArchive(root / "history-repair-raw")
+        self.fetch, self.workers = fetch, workers
         self.origins = None
-        self.repair_budget = RequestBudget((Window("repair", 120, 60),))
         self.auxiliary_history = DailyAuxiliaryHistory(
-            root, self.vision, self.aux, clock_ms=clock_ms, stop=stop
-        )
-
-    @staticmethod
-    def _unaligned_bar(instrument, opening, closing, source_row):
-        log(
-            "kline_archive_noncanonical",
-            instrument=instrument.key,
-            open_ms=opening,
-            close_ms=closing,
-            source_row=source_row,
+            root, None, None, clock_ms=clock_ms, stop=stop, fetch=fetch
         )
 
     def check_origins(self, db):
@@ -185,8 +144,8 @@ class HistoryWorker:
                 if existing is not None and (existing[0] == "verified" or existing[1] > now):
                     continue
                 try:
-                    state, first, rest_first, vision_first, evidence = discover(
-                        instrument, channel, self.rest[instrument.market], self.vision
+                    state, first, rest_first, vision_first, evidence = self.fetch.origin(
+                        instrument, channel
                     )
                 except (OSError, OmegaError) as exc:
                     state, first, rest_first, vision_first = "retry", None, None, None
@@ -238,7 +197,52 @@ class HistoryWorker:
                     first_ms=first,
                 )
 
-    def write_kline_day(self, db, store, instrument, origin):
+    def _day_plan(self, db, series_id, start, end):
+        day = start // DAY * DAY
+        stop = min(end, day + DAY)
+        coverage = db.execute(
+            "SELECT observed FROM market.collector_coverage "
+            "WHERE scope_key=%s AND channel='kline' AND dataset='' AND day_ms=%s",
+            (series_id, day),
+        ).fetchone()
+        existing = set()
+        if coverage is not None:
+            for interval in coverage[0]:
+                existing.update(
+                    range(max(start, interval.lower), min(stop, interval.upper), MINUTE)
+                )
+        gaps, opened = [], None
+        for stamp in range(start, stop + MINUTE, MINUTE):
+            if stamp == stop or stamp in existing:
+                if opened is not None:
+                    gaps.append((opened, stamp))
+                    opened = None
+            elif opened is None:
+                opened = stamp
+        return stop, existing, gaps
+
+    def _prefetch_klines(self, db, pool, instruments):
+        if not instruments:
+            return {}
+        checkpoints = db.execute(
+            "SELECT instrument,historical_series_id,next_ms,end_ms "
+            "FROM market.binance_kline_history WHERE instrument=ANY(%s) AND next_ms<end_ms",
+            ([instrument.key for instrument in instruments],),
+        ).fetchall()
+        pending = {}
+        by_key = {instrument.key: instrument for instrument in instruments}
+        for key, series_id, cursor, end in checkpoints:
+            instrument = by_key[key]
+            until, existing, gaps = self._day_plan(db, series_id, cursor, end)
+            pending[instrument] = (
+                cursor,
+                until,
+                existing,
+                pool.submit(self.fetch.klines, instrument, cursor, until, gaps),
+            )
+        return pending
+
+    def write_kline_day(self, db, store, instrument, origin, pending=None):
         live = store.load(self.inventory[instrument])
         if live.instrument != instrument or live.feed != "binance-public":
             raise ProtocolError("history inventory does not match its live series")
@@ -290,10 +294,12 @@ class HistoryWorker:
             )
         if cursor >= end or self.stop.is_set():
             return False
-        until = min(end, (cursor // DAY + 1) * DAY)
-        rows = self.vision_market[instrument.market].closed_observations(
-            instrument, cursor, until, now_ms=clock_ms()
-        )
+        if pending is not None and pending[0] == cursor:
+            _, until, existing, future = pending
+            rows, archived = future.result()
+        else:
+            until, existing, gaps = self._day_plan(db, complete.series_id, cursor, end)
+            rows, archived = self.fetch.klines(instrument, cursor, until, gaps)
         batch = []
         for item in rows:
             bar = item.candle
@@ -320,8 +326,9 @@ class HistoryWorker:
             if self.stop.is_set():
                 return False
             store.import_batch(complete, tuple(batch[offset : offset + BAR_WRITE_BATCH_SIZE]))
-        missing = (until - cursor) // MINUTE - len(batch)
-        archived = bool(self.vision.files(instrument, "kline", cursor, until)) if missing else False
+        actual = existing | {item.candle.open_time_ms for item in batch}
+        verified = len(actual)
+        missing = (until - cursor) // MINUTE - verified
         # Commit the cursor only after the imported data is readable. Preserve exact
         # unresolved ranges for recheck instead of generating bars in missing slots.
         with db.transaction():
@@ -348,7 +355,6 @@ class HistoryWorker:
                         "incomplete" if batch else "no_rows",
                         checked,
                     )
-                actual = {item.candle.open_time_ms for item in batch}
                 gap_start = None
                 for opening in range(cursor, until + MINUTE, MINUTE):
                     if opening == until or opening in actual:
@@ -365,7 +371,7 @@ class HistoryWorker:
             db.execute(
                 """UPDATE market.binance_kline_history SET next_ms=%s, observed=observed+%s,
                    missing=missing+%s, updated_ms=%s WHERE instrument=%s AND next_ms=%s""",
-                (until, len(batch), missing, clock_ms(), instrument.key, cursor),
+                (until, verified, missing, clock_ms(), instrument.key, cursor),
             )
         log(
             "kline_batch",
@@ -373,6 +379,7 @@ class HistoryWorker:
             start_ms=cursor,
             end_ms=until,
             saved=len(batch),
+            covered=verified,
             missing=missing,
         )
         return True
@@ -408,44 +415,11 @@ class HistoryWorker:
                     raise
             log("trade_confirmed_empty", instrument=instrument.key, open_ms=opening)
             return True
-        end, pending = opening + MINUTE, []
-        client = self.aux[instrument.market]
-        archive_ids = []
-        for _ in range(16):
-            parameters = (
-                {"from_id": pending[-1].aggregate_id + 1}
-                if pending
-                else {
-                    "start_ms": opening,
-                    "end_ms": end,
-                }
-            )
-            self.repair_budget.reserve({"repair": 4 if instrument.market == Market.SPOT else 20})
-            batch = client.agg_trades(instrument, **parameters, limit=1000)
-            receipt = self.raw.put(
-                PublicRawResponse(
-                    instrument,
-                    "agg_trades",
-                    batch.request_parameters,
-                    batch.received_at_ms,
-                    batch.body,
-                    batch.headers,
-                )
-            )
-            archive_ids.append(receipt.archive_id)
-            pending.extend(
-                item.as_flow_event() for item in batch.events if item.trade_time_ms < end
-            )
-            if len(batch.events) < 1000 or batch.events[-1].trade_time_ms >= end:
-                break
-        else:
+        end = opening + MINUTE
+        fetched = self.fetch.repair_trade(instrument, opening)
+        if fetched is None:
             return False
-        if not pending or any(
-            left.aggregate_id + 1 != right.aggregate_id
-            for left, right in zip(pending, pending[1:], strict=False)
-        ):
-            return False
-        values = dict(trade_flow_values(pending))
+        values, events, archive_ids = fetched
         quantity = values["AGGTRADE_QUANTITYBUY"] + values["AGGTRADE_QUANTITYSELL"]
         complete = quantity == volume
         if not complete:
@@ -488,7 +462,7 @@ class HistoryWorker:
                 raise
             return True
         if complete:
-            log("trade_repaired", instrument=instrument.key, open_ms=opening, events=len(pending))
+            log("trade_repaired", instrument=instrument.key, open_ms=opening, events=events)
         else:
             log(
                 "trade_provider_totals_differ",
@@ -538,6 +512,9 @@ class HistoryWorker:
             connect_database(self.settings) as db,
             closing(PostgresBarSeriesStore(self.settings)) as bars,
             closing(PostgresAuxiliaryStore(self.settings)) as auxiliary,
+            ThreadPoolExecutor(
+                max_workers=self.workers, thread_name_prefix="market-prefetch"
+            ) as pool,
         ):
             verify_schema(db)
             while not self.stop.is_set():
@@ -558,87 +535,77 @@ class HistoryWorker:
                     if channel == "kline" and state == "verified"
                 }
                 progressed = False
-                for instrument in self.inventory:
-                    if self.stop.is_set():
-                        return
-                    if instrument.key not in known:
-                        continue
-                    try:
-                        progressed |= self.write_kline_day(
-                            db, bars, instrument, known[instrument.key]
-                        )
-                    except RateLimited as exc:
-                        log("backfill_throttled", seconds=exc.retry_after)
-                        self.stop.wait(max(1, min(60, exc.retry_after or 0)))
-                        break
-                    except (OSError, OmegaError) as exc:
-                        log(
-                            "kline_history_error",
-                            instrument=instrument.key,
-                            error=type(exc).__name__,
-                        )
-                    if clock_ms() >= next_repair:
-                        self.recent_trade_gaps(db, auxiliary)
-                        next_repair = clock_ms() + MINUTE
+                active = [instrument for instrument in self.inventory if instrument.key in known]
+                for group in batched(active, self.workers, strict=False):
+                    prefetched = self._prefetch_klines(db, pool, group)
+                    for instrument in group:
+                        if self.stop.is_set():
+                            return
+                        try:
+                            progressed |= self.write_kline_day(
+                                db,
+                                bars,
+                                instrument,
+                                known[instrument.key],
+                                prefetched.get(instrument),
+                            )
+                        except RateLimited as exc:
+                            log("backfill_throttled", seconds=exc.retry_after)
+                            self.stop.wait(max(1, min(60, exc.retry_after or 0)))
+                            break
+                        except (OSError, OmegaError) as exc:
+                            log(
+                                "kline_history_error",
+                                instrument=instrument.key,
+                                error=type(exc).__name__,
+                            )
+                        if clock_ms() >= next_repair:
+                            self.recent_trade_gaps(db, auxiliary)
+                            next_repair = clock_ms() + MINUTE
                 histories = sorted(
                     (key, channel, first)
                     for (key, channel), (state, _, first) in self.origins.items()
                     if channel != "kline" and state == "verified"
                 )
                 by_key = {instrument.key: instrument for instrument in self.inventory}
-                for key, channel, first in histories:
-                    if self.stop.is_set():
-                        return
-                    if key not in by_key:
-                        continue
-                    try:
-                        result = self.auxiliary_history.step(
-                            db, auxiliary, by_key[key], channel, first
+                for group in batched(histories, self.workers, strict=False):
+                    prepared = {
+                        (key, channel): self.auxiliary_history.prepare(
+                            db, pool, by_key[key], channel, first
                         )
-                        if result:
-                            progressed = True
-                            log("auxiliary_batch", instrument=key, channel=channel, **result)
-                    except RateLimited as exc:
-                        log("backfill_throttled", seconds=exc.retry_after)
-                        self.stop.wait(max(1, min(60, exc.retry_after or 0)))
-                        break
-                    except (OSError, OmegaError, ArithmeticError) as exc:
-                        log(
-                            "auxiliary_history_error",
-                            instrument=key,
-                            channel=channel,
-                            error=type(exc).__name__,
-                        )
-                    if clock_ms() >= next_repair:
-                        self.recent_trade_gaps(db, auxiliary)
-                        next_repair = clock_ms() + MINUTE
+                        for key, channel, first in group
+                        if key in by_key
+                    }
+                    for key, channel, first in group:
+                        if self.stop.is_set():
+                            return
+                        if key not in by_key:
+                            continue
+                        try:
+                            result = self.auxiliary_history.step(
+                                db,
+                                auxiliary,
+                                by_key[key],
+                                channel,
+                                first,
+                                prepared=prepared[key, channel],
+                            )
+                            if result:
+                                progressed = True
+                                log("auxiliary_batch", instrument=key, channel=channel, **result)
+                        except RateLimited as exc:
+                            log("backfill_throttled", seconds=exc.retry_after)
+                            self.stop.wait(max(1, min(60, exc.retry_after or 0)))
+                            break
+                        except (OSError, OmegaError, ArithmeticError) as exc:
+                            log(
+                                "auxiliary_history_error",
+                                instrument=key,
+                                channel=channel,
+                                error=type(exc).__name__,
+                            )
+                        if clock_ms() >= next_repair:
+                            self.recent_trade_gaps(db, auxiliary)
+                            next_repair = clock_ms() + MINUTE
                 if not progressed:
                     self.stop.wait(15)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Discover and backfill the Binance collector inventory"
-    )
-    parser.add_argument("--root", type=Path, required=True)
-    args = parser.parse_args(argv)
-    root = args.root.resolve()
-    stop = Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: stop.set())
-    with closing(InstanceLock(root / "history-worker.lock")):
-        try:
-            worker = HistoryWorker(
-                root,
-                load_database_settings(root / "database.config.toml"),
-                read_inventory(root / "handoff.json"),
-                stop,
-            )
-            worker.run()
-        except InterruptedError:
-            if not stop.is_set():
-                raise
-
-
-if __name__ == "__main__":
-    main()

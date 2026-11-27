@@ -167,6 +167,7 @@ class VisionArchive:
         stop_requested=lambda: False,
         cache_ttl_seconds=300,
         paced=False,
+        shared_admission=None,
     ):
         if (
             type(paced) is not bool
@@ -189,7 +190,7 @@ class VisionArchive:
             self.root / "admission" / (hashlib.sha256(origin.encode()).hexdigest() + ".json")
         )
         self._guard(budget_path)
-        self._budget = _OriginBudget(
+        self._budget = shared_admission or _OriginBudget(
             budget_path, (Window(origin, 1, 1),), clock=lambda: self.clock_ms() / 1000
         )
         self._admission_fault = False
