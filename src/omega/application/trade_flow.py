@@ -49,6 +49,48 @@ def _signature(event):
     )
 
 
+def trade_flow_values(events):
+    """Exact one-minute totals shared by live and verified-file ingestion."""
+    totals = {
+        key: Decimal(0)
+        for key in (
+            "AGGTRADE_QUANTITYBUY",
+            "AGGTRADE_QUANTITYSELL",
+            "AGGTRADE_NOTIONALBUY",
+            "AGGTRADE_NOTIONALSELL",
+        )
+    }
+    totals.update(AGGTRADE_NTRADESBUY=0, AGGTRADE_NTRADESSELL=0, AGGTRADE_EVENTCOUNT=len(events))
+    # Decimal's default 28 significant digits can silently round exact money.
+    # Bound the required working precision before allocating its arithmetic state.
+    low, high = 0, 0
+    for event in events:
+        low = min(
+            low,
+            event.quantity.as_tuple().exponent,
+            event.quantity.as_tuple().exponent + event.price.as_tuple().exponent,
+        )
+        high = max(
+            high,
+            event.quantity.adjusted(),
+            event.quantity.adjusted() + event.price.adjusted() + 1,
+        )
+    precision = max(28, high - low + len(str(len(events) + 1)) + 4)
+    if precision > 4096:
+        raise ValidationError("trade flow exact arithmetic capacity exceeded")
+    try:
+        with localcontext() as context:
+            context.prec = precision
+            for event in events:
+                side = "SELL" if event.buyer_is_maker else "BUY"
+                totals["AGGTRADE_QUANTITY" + side] += event.quantity
+                totals["AGGTRADE_NOTIONAL" + side] += event.quantity * event.price
+                totals["AGGTRADE_NTRADES" + side] += event.trade_count
+    except DecimalException:
+        raise ValidationError("trade flow notional outside exact arithmetic limits") from None
+    return tuple(totals.items())
+
+
 class TradeFlowAggregator:
     def __init__(
         self, instrument, start_ms, *, source, generation=0, max_pending_events=4096, max_minutes=16
@@ -167,49 +209,11 @@ class TradeFlowAggregator:
         if any(event.available_at_ms > as_of_ms for event in events):
             raise ValidationError("trade flow observation was not yet available")
         complete = self._proof(coverage, opening, ending, as_of_ms)
-        totals = {
-            key: Decimal(0)
-            for key in (
-                "AGGTRADE_QUANTITYBUY",
-                "AGGTRADE_QUANTITYSELL",
-                "AGGTRADE_NOTIONALBUY",
-                "AGGTRADE_NOTIONALSELL",
-            )
-        }
-        totals.update(
-            AGGTRADE_NTRADESBUY=0, AGGTRADE_NTRADESSELL=0, AGGTRADE_EVENTCOUNT=len(events)
-        )
-        # Decimal's default 28 significant digits can silently round exact money.
-        # Bound the required working precision before allocating its arithmetic state.
-        low, high = 0, 0
-        for event in events:
-            low = min(
-                low,
-                event.quantity.as_tuple().exponent,
-                event.quantity.as_tuple().exponent + event.price.as_tuple().exponent,
-            )
-            high = max(
-                high,
-                event.quantity.adjusted(),
-                event.quantity.adjusted() + event.price.adjusted() + 1,
-            )
-        precision = max(28, high - low + len(str(len(events) + 1)) + 4)
-        if precision > 4096:
-            raise ValidationError("trade flow exact arithmetic capacity exceeded")
-        try:
-            with localcontext() as context:
-                context.prec = precision
-                for event in events:
-                    side = "SELL" if event.buyer_is_maker else "BUY"
-                    totals["AGGTRADE_QUANTITY" + side] += event.quantity
-                    totals["AGGTRADE_NOTIONAL" + side] += event.quantity * event.price
-                    totals["AGGTRADE_NTRADES" + side] += event.trade_count
-        except DecimalException:
-            raise ValidationError("trade flow notional outside exact arithmetic limits") from None
+        totals = trade_flow_values(events)
         quality = "observed" if complete else "partial" if events else "missing"
         result = AuxiliaryInput(
             "trade_flow",
-            tuple(totals.items()) if events or complete else (),
+            totals if events or complete else (),
             opening,
             ending,
             ending,
