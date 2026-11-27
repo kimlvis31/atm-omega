@@ -4,6 +4,18 @@ This Linux Docker Compose deployment collects the existing 20 public Binance
 one-minute series into a dedicated TimescaleDB volume. The database and
 collector read API publish only to loopback.
 
+The same subscriptions receive aggregate trades and diff depth. Trade-flow
+rows contain exact buy/sell one-minute sums and fill counts. The collector
+repairs gaps of up to 1,000 aggregate IDs with one public REST request and
+marks unproven minutes partial. Depth starts with a 1,000-level REST snapshot,
+checks diff continuity, and stores minute-end price-distance bands from
+the synchronized book. Limited book coverage or a stale sample is partial.
+The 10 USD-M symbols also store five-minute open interest and account
+long/short ratio at the provider's timestamps. No synthetic one-minute
+metrics or historical depth are emitted. Auxiliary REST calls use the
+same 600-weight-per-minute ledger as candles, with a separate limit of
+100 metric requests per five minutes and staggered socket starts.
+
 The checkout lives on the deployment host's Desktop. Keep the original
 series boundary in `state/kbeeshome-collector/deploy.env` as
 `OMEGA_EFFECTIVE_FROM_MS`. The runtime database configuration belongs at
@@ -26,4 +38,6 @@ docker compose --env-file state/kbeeshome-collector/deploy.env -f deploy/collect
 For a fresh database, use `migrate` instead of `status`. For an existing
 database with a new schema version, verify a backup before migrating. Verify
 that the published commit matches the checkout and that each of the 20 series
-stores new closed candles before recording the deployment as healthy.
+stores new closed candles. Check the four auxiliary channels in
+`market.auxiliary_minutes` and check response weights, throttling and
+reconnects in the collector log.

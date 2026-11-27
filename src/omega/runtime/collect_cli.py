@@ -62,6 +62,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--api-token-file", type=Path, help="Bearer token file required with --api-port"
     )
+    result.add_argument(
+        "--collect-auxiliary",
+        action="store_true",
+        help="Also collect live depth, aggregate trades and USD-M metrics",
+    )
     return result
 
 
@@ -162,6 +167,7 @@ async def collect(args) -> None:
         else {key.key: value.series_id for key, value in native_series.items()}
     )
     api = None
+    auxiliary_task = None
     source = None
     stop = asyncio.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -200,6 +206,7 @@ async def collect(args) -> None:
             budget_path = args.db_config.resolve().parent / "state" / "binance-public-budget.json"
         budget = SharedRequestBudget(budget_path)
         histories = {}
+        clients = {}
         for plan in plans:
             market = plan.market
             transport = UrllibTransport()
@@ -210,6 +217,7 @@ async def collect(args) -> None:
                 transport,
                 budget=budget,
             )
+            clients[market] = client
             histories[market] = (
                 BinanceMarketData(market, client, raw_archive=archive)
                 if capture
@@ -267,6 +275,14 @@ async def collect(args) -> None:
                     worker.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
 
+        if getattr(args, "collect_auxiliary", False):
+            from omega.runtime.collect_aux_live import LiveAuxiliary
+
+            auxiliary_task = asyncio.create_task(
+                LiveAuxiliary(settings, clients).run(instruments, stop)
+            )
+            auxiliary_task.add_done_callback(lambda task: stop.set())
+
         if native_series is None:
             await run_workers(store, starts)
         else:
@@ -281,15 +297,23 @@ async def collect(args) -> None:
             await _retry_native_storage(run_native, stop, health)
     finally:
         try:
-            if api is not None:
-                api.close()
+            if auxiliary_task is not None:
+                stop.set()
+                if sys.exc_info()[0] is None:
+                    await asyncio.shield(auxiliary_task)
+                else:
+                    await asyncio.gather(auxiliary_task, return_exceptions=True)
         finally:
             try:
-                if source is not None:
-                    source.close()
+                if api is not None:
+                    api.close()
             finally:
-                if store is not None:
-                    store.close()
+                try:
+                    if source is not None:
+                        source.close()
+                finally:
+                    if store is not None:
+                        store.close()
 
 
 async def _retry_native_storage(run_native, stop, health):

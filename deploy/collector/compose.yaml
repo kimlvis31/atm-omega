@@ -40,6 +40,7 @@ services:
     volumes:
       - ../../state/kbeeshome-collector:/run/omega
     command:
+      - --collect-auxiliary
       - --db-config
       - /run/omega/database.config.toml
       - --request-budget-file
