@@ -405,8 +405,16 @@ class HistoryWorker:
         ):
             return False
         values = dict(trade_flow_values(pending))
-        if values["AGGTRADE_QUANTITYBUY"] + values["AGGTRADE_QUANTITYSELL"] != volume:
-            return False
+        quantity = values["AGGTRADE_QUANTITYBUY"] + values["AGGTRADE_QUANTITYSELL"]
+        complete = quantity == volume
+        if not complete:
+            values["AGGTRADE_KLINE_QUANTITY"] = volume
+            values["AGGTRADE_KLINE_DELTA"] = quantity - volume
+        values["AGGTRADE_REST_REPAIR"] = 1
+        if prior is not None and not complete:
+            previous = prior.observation.mapping()
+            if all(previous.get(name) == value for name, value in values.items()):
+                return False
         digest = sha256("".join(archive_ids).encode()).hexdigest()
         atomic_json(
             self.root / "history-repair-receipts" / (digest + ".json"),
@@ -416,7 +424,6 @@ class HistoryWorker:
                 "raw_responses": archive_ids,
             },
         )
-        values["AGGTRADE_REST_REPAIR"] = 1
         values["AGGTRADE_REST_ARCHIVE_DIGEST"] = int(digest, 16)
         try:
             store.put(
@@ -428,8 +435,8 @@ class HistoryWorker:
                     end,
                     end,
                     clock_ms(),
-                    "observed",
-                    Decimal(1),
+                    "observed" if complete else "partial",
+                    Decimal(int(complete)),
                     source,
                 ),
                 expected_previous=None if prior is None else prior.checksum,
@@ -438,8 +445,18 @@ class HistoryWorker:
             latest = store.get(instrument, "trade_flow", source, opening, as_of_ms=clock_ms())
             if latest is None or latest.observation.quality != "observed":
                 raise
-        log("trade_repaired", instrument=instrument.key, open_ms=opening, events=len(pending))
-        return True
+            return True
+        if complete:
+            log("trade_repaired", instrument=instrument.key, open_ms=opening, events=len(pending))
+        else:
+            log(
+                "trade_provider_totals_differ",
+                instrument=instrument.key,
+                open_ms=opening,
+                aggregate_quantity=str(quantity),
+                candle_volume=str(volume),
+            )
+        return complete
 
     def recent_trade_gaps(self, db, store):
         now = clock_ms()

@@ -40,8 +40,10 @@ Live snapshots start when the stream is observed.
 
 The history service checks recently closed candle volumes against available
 trade-flow minutes. It repairs within current REST retention under the shared
-budget and stores a repair only after matching the closed candle volume. It
-records zero-volume minutes from committed candles.
+budget and marks repairs verified when they match the closed candle volume.
+When Binance returns different totals, the measured trade-flow row and its
+source receipts are retained as partial. Zero-volume minutes are verified
+from committed candles.
 
 The checkout lives on the deployment host's Desktop. Keep the original
 series boundary in `state/kbeeshome-collector/deploy.env` as
