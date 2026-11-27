@@ -28,6 +28,7 @@ services:
       options: {max-size: 10m, max-file: "3"}
 
   collector:
+    image: atm-omega-collector-live-collector
     build:
       context: ../..
       dockerfile: deploy/collector/Dockerfile
@@ -91,6 +92,22 @@ services:
       - usdm:AMZNUSDT
       - --subscription
       - usdm:MSFTUSDT
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  history:
+    image: atm-omega-collector-live-collector
+    network_mode: host
+    restart: "on-failure:5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets: [db_app_password]
+    volumes:
+      - ../../state/kbeeshome-collector:/run/omega
+    entrypoint: [python, -I, -B, -m, omega.runtime.collector_history]
+    command: [--root, /run/omega]
     logging:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}

@@ -12,6 +12,7 @@ MIGRATIONS = {
     4: "004_vision_provenance.sql",
     5: "005_bar_series.sql",
     6: "006_eta_metric_minutes.sql",
+    7: "007_binance_history_origins.sql",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
