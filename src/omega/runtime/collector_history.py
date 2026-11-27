@@ -12,6 +12,8 @@ from hashlib import sha256
 from pathlib import Path
 from threading import Event
 
+from psycopg.errors import QueryCanceled
+
 from omega.application.trade_flow import trade_flow_values
 from omega.domain.bar_series import SeriesCandle, SeriesObservation
 from omega.domain.errors import (
@@ -442,23 +444,29 @@ class HistoryWorker:
     def recent_trade_gaps(self, db, store):
         now = clock_ms()
         by_id = {series: instrument for instrument, series in self.inventory.items()}
-        candidates = db.execute(
-            """SELECT series_id, (extract(epoch FROM open_time)*1000)::bigint, v
-               FROM market.series_candles AS bar JOIN market.bar_series AS series USING (series_id)
-               WHERE series_id=ANY(%s) AND open_time>=now()-interval '1 day'
-                 AND open_time<now()-interval '3 minutes'
-                 AND open_time >= (SELECT min(a.open_time) FROM market.auxiliary_minutes a
-                       WHERE a.instrument=series.definition->>'instrument'
-                         AND a.channel='trade_flow'
-                         AND a.dataset=a.instrument||':aggTrade')
-                 AND NOT EXISTS (SELECT 1 FROM market.auxiliary_minutes a
-                       WHERE a.instrument=series.definition->>'instrument'
-                         AND a.channel='trade_flow' AND a.open_time=bar.open_time
-                         AND convert_from(a.payload,'UTF8')::jsonb
-                             ->'observation'->>'quality'='observed')
-               ORDER BY open_time LIMIT 60""",
-            (list(by_id),),
-        ).fetchall()
+        try:
+            candidates = db.execute(
+                """SELECT bar.series_id,(extract(epoch FROM bar.open_time)*1000)::bigint,bar.v
+                   FROM unnest(%s::text[],%s::text[]) AS target(instrument,series_id)
+                   JOIN market.series_candles AS bar ON bar.series_id=target.series_id
+                   LEFT JOIN LATERAL (
+                       SELECT convert_from(a.payload,'UTF8')::jsonb
+                               ->'observation'->>'quality' AS quality
+                       FROM market.auxiliary_minutes AS a
+                       WHERE a.instrument=target.instrument AND a.channel='trade_flow'
+                         AND a.dataset=target.instrument||':aggTrade'
+                         AND a.open_time=bar.open_time
+                       ORDER BY a.revision DESC LIMIT 1
+                   ) AS flow ON true
+                   WHERE bar.open_time>=now()-interval '1 day'
+                     AND bar.open_time<now()-interval '3 minutes'
+                     AND flow.quality IS DISTINCT FROM 'observed'
+                   ORDER BY bar.open_time DESC,bar.series_id LIMIT 60""",
+                ([instrument.key for instrument in by_id.values()], list(by_id)),
+            ).fetchall()
+        except QueryCanceled:
+            log("trade_repair_scan_timeout")
+            return
         for series_id, opening, volume in candidates:
             if self.stop.is_set():
                 break
