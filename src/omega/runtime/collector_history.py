@@ -55,7 +55,7 @@ def log(event, **details):
 
 
 def read_inventory(path):
-    if path.stat().st_size > 65536:
+    if path.stat().st_size > 16 * 1024 * 1024:
         raise ValidationError("history inventory exceeds its bound")
     entries = json.loads(path.read_text(encoding="utf-8"))["expected_series"]
     if type(entries) is not dict or not 1 <= len(entries) <= 25:
