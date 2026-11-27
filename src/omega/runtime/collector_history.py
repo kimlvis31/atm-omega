@@ -125,9 +125,12 @@ def discover(instrument, channel, rest, vision):
 
 
 class HistoryWorker:
-    def __init__(self, root, settings, inventory, stop, fetch, *, workers=12, write=run_write):
+    def __init__(
+        self, root, settings, inventory, stop, fetch, *, workers=12, write=run_write, on_commit=None
+    ):
         self.root, self.settings, self.inventory, self.stop = root, settings, inventory, stop
         self.fetch, self.workers, self.write = fetch, workers, write
+        self.on_commit = on_commit
         self.origins = None
         self.auxiliary_history = DailyAuxiliaryHistory(
             root, None, None, clock_ms=clock_ms, stop=stop, fetch=fetch, write=write
@@ -272,7 +275,7 @@ class HistoryWorker:
                 break
             inserted.append(replace(item, candle=replace(item.candle, series=complete)))
         if inserted:
-            self.write("history", store.import_batch, complete, tuple(inserted))
+            self.write("history", store.import_batch, complete, tuple(inserted), mirror=True)
             mirror = inserted[-1].candle.close_time_ms
             db.execute(
                 "UPDATE market.binance_kline_history SET mirror_ms=%s WHERE instrument=%s",
@@ -638,8 +641,8 @@ class HistoryWorker:
         self.resume_pending = True
         with (
             connect_database(self.settings) as db,
-            closing(PostgresBarSeriesStore(self.settings)) as bars,
-            closing(PostgresAuxiliaryStore(self.settings)) as auxiliary,
+            closing(PostgresBarSeriesStore(self.settings, on_commit=self.on_commit)) as bars,
+            closing(PostgresAuxiliaryStore(self.settings, on_commit=self.on_commit)) as auxiliary,
             ThreadPoolExecutor(
                 max_workers=min(self.workers, BACKFILL_MAX_PAGES),
                 thread_name_prefix="market-prefetch",

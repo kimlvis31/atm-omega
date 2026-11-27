@@ -19,6 +19,7 @@ from omega.infrastructure.candles import DatabaseUnavailable
 from omega.infrastructure.postgres.batching import COMMIT_BATCH_ROWS
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.runtime.collector_history import HistoryWorker, read_inventory
+from omega.runtime.collector_progress import BackfillProgress, TransferMeter
 from omega.runtime.collector_server import CollectorAPIServer, read_api_token
 from omega.runtime.collector_write_queue import CollectorWriteQueue, run_write
 from omega.runtime.control import InstanceLock
@@ -35,9 +36,10 @@ from omega.runtime.market_wire import (
 
 
 class DatabaseIngestion:
-    def __init__(self, settings, series, stop, *, write=run_write):
+    def __init__(self, settings, series, stop, *, write=run_write, on_commit=None):
         self.settings, self.series, self.stop = settings, series, stop
         self.write = write
+        self.on_commit = on_commit
         self.lock = RLock()
         self.bars = self.auxiliary = None
 
@@ -52,7 +54,7 @@ class DatabaseIngestion:
     def _bars(self):
         if self.bars is None:
             self.bars = BinanceMinuteSeriesStore(
-                self.settings, self.series, time.time_ns() // 1_000_000
+                self.settings, self.series, time.time_ns() // 1_000_000, on_commit=self.on_commit
             )
         return self.bars
 
@@ -109,7 +111,9 @@ class DatabaseIngestion:
                     rows = [auxiliary_from_document(row) for row in args["rows"]]
                     self._allowed(instrument for instrument, _ in rows)
                     if self.auxiliary is None:
-                        self.auxiliary = PostgresAuxiliaryStore(self.settings)
+                        self.auxiliary = PostgresAuxiliaryStore(
+                            self.settings, on_commit=self.on_commit
+                        )
                     return self.auxiliary.put_live_batch(rows)
             except DatabaseUnavailable:
                 self.close()
@@ -180,11 +184,15 @@ def main(argv=None):
     if {instrument: item.series_id for instrument, item in series.items()} != inventory:
         raise ValidationError("data manager series differ from the saved inventory")
     ipc = root / "ipc"
+    meter = TransferMeter()
+    progress = BackfillProgress(root, settings, inventory, meter)
     # The old backfill owner shares this lock across upgrades.
     with (
         closing(InstanceLock(root / "history-worker.lock")),
         closing(CollectorWriteQueue()) as writes,
-        closing(DatabaseIngestion(settings, series, stop, write=writes.run)) as ingest,
+        closing(
+            DatabaseIngestion(settings, series, stop, write=writes.run, on_commit=meter.record)
+        ) as ingest,
     ):
         ingest._bars()
         with serve_market_socket(ipc / "database.sock", ingest.dispatch, capacity=8):
@@ -193,6 +201,7 @@ def main(argv=None):
                 read_api_token(args.api_token_file),
                 args.api_port,
                 series_store=lambda: PostgresBarSeriesStore(settings, read_only=True),
+                progress=progress,
             )
             api.start()
             try:
@@ -206,6 +215,7 @@ def main(argv=None):
                     fetch,
                     workers=args.fetch_workers,
                     write=writes.run,
+                    on_commit=meter.record,
                 ).run()
             except InterruptedError:
                 if not stop.is_set():

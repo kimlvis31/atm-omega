@@ -69,7 +69,8 @@ def _lock_id(instrument, observation):
 
 
 class PostgresAuxiliaryStore:
-    def __init__(self, settings):
+    def __init__(self, settings, *, on_commit=None):
+        self.on_commit = on_commit
         self._destination_id = database_destination_id(settings)
         self.connection = connect_database(settings)
         import psycopg
@@ -144,6 +145,7 @@ class PostgresAuxiliaryStore:
         payload = encode_observation(instrument, observation)
         digest = sha256(payload).hexdigest()
         lock_id = _lock_id(instrument, observation)
+        written_bytes = None
         try:
             with self.connection.transaction():
                 self.connection.execute("SELECT pg_advisory_xact_lock(%s)", (lock_id,))
@@ -184,11 +186,16 @@ class PostgresAuxiliaryStore:
                 if receipt is None:
                     if revision > 2**63 - 1:
                         raise ProtocolError("auxiliary revision capacity exceeded")
-                    self.connection.execute(
+                    size_column = (
+                        " RETURNING pg_column_size(auxiliary_minutes)"
+                        if self.on_commit is not None
+                        else ""
+                    )
+                    inserted = self.connection.execute(
                         "INSERT INTO market.auxiliary_minutes "
                         "(instrument,channel,dataset,open_time,revision,available_ms,event_ms,"
                         "payload,checksum,previous_checksum) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)" + size_column,
                         (
                             *key,
                             revision,
@@ -199,8 +206,12 @@ class PostgresAuxiliaryStore:
                             previous,
                         ),
                     )
+                    if size_column:
+                        written_bytes = inserted.fetchone()[0]
                     receipt = AuxiliaryWriteReceipt(revision, digest, True)
             # A raised/unknown commit never publishes a successful receipt.
+            if written_bytes is not None:
+                self.on_commit("repair", observation.channel, 1, written_bytes)
             return receipt
         except self._database_error:
             raise StorageError(
@@ -234,6 +245,7 @@ class PostgresAuxiliaryStore:
 
         lock_ids = sorted({_lock_id(instrument, row) for instrument, row in observations})
         keys = tuple(map(list, zip(*by_key, strict=True)))
+        measured = ()
         try:
             with self.connection.transaction():
                 self.connection.execute(
@@ -310,7 +322,12 @@ class PostgresAuxiliaryStore:
                         )
                     )
                 if inserts:
-                    self.connection.execute(
+                    size_column = (
+                        " RETURNING channel,pg_column_size(auxiliary_minutes)"
+                        if self.on_commit is not None
+                        else ""
+                    )
+                    query = (
                         """
                         INSERT INTO market.auxiliary_minutes
                             (instrument,channel,dataset,open_time,revision,available_ms,event_ms,
@@ -319,9 +336,20 @@ class PostgresAuxiliaryStore:
                             %s::text[], %s::text[], %s::text[], %s::timestamptz[], %s::bigint[],
                             %s::bigint[], %s::bigint[], %s::bytea[], %s::text[], %s::text[]
                         )
-                        """,
-                        tuple(map(list, zip(*inserts, strict=True))),
+                    """
+                        + size_column
                     )
+                    inserted = self.connection.execute(
+                        query, tuple(map(list, zip(*inserts, strict=True)))
+                    )
+                    if size_column:
+                        measured = inserted.fetchall()
+            totals = {}
+            for channel, size in measured:
+                rows, bytes_saved = totals.get(channel, (0, 0))
+                totals[channel] = (rows + 1, bytes_saved + size)
+            for channel, (rows, bytes_saved) in totals.items():
+                self.on_commit("backfill" if history else "live", channel, rows, bytes_saved)
             return len(inserts)
         except self._database_error:
             raise StorageError("auxiliary batch commit failed") from None

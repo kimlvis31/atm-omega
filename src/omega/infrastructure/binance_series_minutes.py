@@ -21,9 +21,9 @@ def binance_minute_series(instruments, effective_from_ms):
 
 
 class BinanceMinuteSeriesStore:
-    def __init__(self, settings, series, now_ms):
+    def __init__(self, settings, series, now_ms, *, on_commit=None):
         self.series = series
-        self.store = PostgresBarSeriesStore(settings)
+        self.store = PostgresBarSeriesStore(settings, on_commit=on_commit)
         try:
             self.starts = {
                 instrument: self.store.claim_live_series(series, now_ms)

@@ -22,6 +22,7 @@ from omega.runtime.collector_api import (
     read_collector_history,
     read_collector_stream,
 )
+from omega.runtime.collector_progress import BACKFILL_PROGRESS_PATH, read_backfill_progress
 from omega.runtime.collector_series_api import (
     SERIES_AGGREGATE_PATH,
     SERIES_DEFINITION_PATH,
@@ -60,7 +61,7 @@ class _CollectorHTTPServer(BoundedHTTPServer):
 class CollectorAPIServer:
     """Lifecycle wrapper; the HTTP worker pool and timeout come from local_http."""
 
-    def __init__(self, source, token: str, port: int = 0, *, series_store=None):
+    def __init__(self, source, token: str, port: int = 0, *, series_store=None, progress=None):
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValidationError("invalid collector API port")
         if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token):
@@ -100,6 +101,7 @@ class CollectorAPIServer:
                     return
                 sources = {
                     HISTORY_PATH: (read_collector_history, owner.source),
+                    BACKFILL_PROGRESS_PATH: (read_backfill_progress, progress),
                     BATCH_PATH: (read_collector_batch, owner.source),
                     STREAM_PATH: (read_collector_stream, owner.source),
                     SERIES_STREAM_PATH: (read_series_stream, series_store),

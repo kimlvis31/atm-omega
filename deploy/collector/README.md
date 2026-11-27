@@ -71,6 +71,21 @@ data manager reserves one 1,440-row page per in-flight history fetch, up to 12
 pages. It pauses admission on the collector at 10 finished pages and resumes
 at six. Active fetches, stream ingestion and repair continue during the pause.
 
+The data manager exposes authenticated `GET /api/collector/v2/backfill-progress`.
+Rates use actual inserted PostgreSQL row bytes after commit over the last 60
+and 300 elapsed seconds. They include idle and interleaved time and separate
+backfill, live writes and repairs. The combined view sums those lanes without
+counting the live-tail mirror twice. A restart starts new rate samples. The
+progress percentage uses verified checkpoints. Remaining bytes are estimated
+per channel with measured backfill row sizes, including two series per native
+metrics slot. A missing rate sample or an unplanned target is reported as unknown.
+
+TimescaleDB columnstore policies use Eta's seven-day age threshold and
+descending opening time. Segments use the instrument or series identity and
+the auxiliary dataset keys. The background jobs start at staggered times and
+convert at most four chunks per run. Existing eligible chunks can also be
+converted in small batches, with a short lock timeout during live backfill.
+
 When replacing an installation with the former history service, stop the old
 collector and history before starting collector and data_manager. The existing
 volume, original series boundaries, inventory, and checkpoints are reused.

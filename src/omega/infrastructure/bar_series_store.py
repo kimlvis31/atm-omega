@@ -34,7 +34,8 @@ def series_observation(series, row) -> SeriesObservation:
 
 
 class PostgresBarSeriesStore:
-    def __init__(self, settings: DatabaseSettings, *, read_only: bool = False):
+    def __init__(self, settings: DatabaseSettings, *, read_only: bool = False, on_commit=None):
+        self.on_commit = on_commit
         self.connection = connect_database(settings)
         import psycopg
 
@@ -128,11 +129,13 @@ class PostgresBarSeriesStore:
             raise ProtocolError("bar does not match the registered series metadata")
         try:
             with self.connection.transaction():
-                return self._insert_batch((observation,))[0][0]
+                return self._insert_batch((observation,))[0][0][0]
         except self._database_error:
             raise StorageError("bar commit failed; retry with the same series and time") from None
 
-    def import_batch(self, series: BarSeries, observations: tuple[SeriesObservation, ...]) -> int:
+    def import_batch(
+        self, series: BarSeries, observations: tuple[SeriesObservation, ...], *, mirror=False
+    ) -> int:
         if (
             not isinstance(series, BarSeries)
             or type(observations) is not tuple
@@ -152,7 +155,11 @@ class PostgresBarSeriesStore:
         try:
             with self.connection.transaction():
                 self.register(series)
-                return sum(inserted for inserted, _ in self._insert_batch(observations))
+                result, new_bytes = self._insert_batch(observations)
+            count = sum(inserted for inserted, _ in result)
+            if self.on_commit is not None and not mirror and count:
+                self.on_commit("backfill", "kline", count, new_bytes)
+            return count
         except self._database_error:
             raise StorageError("base-bar batch failed; retry the same ordered batch") from None
 
@@ -214,8 +221,11 @@ class PostgresBarSeriesStore:
         try:
             with self.connection.transaction():
                 cursors = self._lock_live_cursors(series_by_id)
-                result = self._insert_batch(observations, missing_only=missing_only)
+                result, new_bytes = self._insert_batch(observations, missing_only=missing_only)
                 self._advance_committed_prefixes(series_by_id, cursors, received_by_id)
+            if self.on_commit is not None and new_bytes:
+                count = sum(inserted for inserted, _ in result)
+                self.on_commit("repair" if missing_only else "live", "kline", count, new_bytes)
             return result
         except self._database_error as error:
             raise self._storage_error(error, "live base-bar batch commit failed") from None
@@ -318,20 +328,22 @@ class PostgresBarSeriesStore:
         for row in values:
             first_by_key.setdefault(row[:2], row)
         ordered_rows = [first_by_key[key] for key in sorted(first_by_key)]
-        inserted = set(
-            self.connection.execute(
-                f"""
+        size_column = ",pg_column_size(series_candles)" if self.on_commit is not None else ""
+        inserted_rows = self.connection.execute(
+            f"""
                 INSERT INTO market.series_candles (series_id,{OBSERVATION_COLUMNS})
                 SELECT * FROM unnest(
                     %s::text[], %s::timestamptz[], %s::timestamptz[],
                     %s::numeric[], %s::numeric[], %s::numeric[], %s::numeric[], %s::numeric[],
                     %s::text[], %s::bigint[], %s::bytea[], %s::text[], %s::bigint[]
                 )
-                ON CONFLICT (series_id,open_time) DO NOTHING RETURNING series_id,open_time
+                ON CONFLICT (series_id,open_time) DO NOTHING
+                RETURNING series_id,open_time{size_column}
                 """,
-                tuple(map(list, zip(*ordered_rows, strict=True))),
-            ).fetchall()
-        )
+            tuple(map(list, zip(*ordered_rows, strict=True))),
+        ).fetchall()
+        inserted = {row[:2] for row in inserted_rows}
+        new_bytes = sum(row[2] for row in inserted_rows) if size_column else 0
         existing = {}
         conflicts = sorted(first_by_key.keys() - inserted)
         if conflicts:
@@ -361,7 +373,7 @@ class PostgresBarSeriesStore:
             if accepted != observation.candle and not missing_only:
                 raise ProtocolError("conflicting base-bar observation; original retained")
             result.append((is_new, accepted))
-        return result
+        return result, new_bytes
 
     def read_observations(
         self,
