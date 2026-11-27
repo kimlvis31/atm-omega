@@ -184,18 +184,15 @@ class PostgresCandleStore:
                 if inserted is None:
                     row = self.connection.execute(
                         f"SELECT {CANDLE_COLUMNS} FROM market.candles_1m "
-                        "WHERE instrument=%s AND open_time=%s FOR UPDATE",
+                        "WHERE instrument=%s AND open_time=%s",
                         key,
                     ).fetchone()
                     if row is None or candle_from_row(c.instrument, row) != c:
                         raise ProtocolError("conflicting closed minute; original data retained")
                     if observation.raw is not None:
                         self.connection.execute(
-                            "UPDATE market.candles_1m SET raw=COALESCE(raw,%s), "
-                            "raw_source=CASE WHEN raw IS NULL THEN %s ELSE raw_source END, "
-                            "raw_received_ms=CASE WHEN raw IS NULL THEN %s "
-                            "ELSE raw_received_ms END "
-                            "WHERE instrument=%s AND open_time=%s",
+                            "UPDATE market.candles_1m SET raw=%s,raw_source=%s,raw_received_ms=%s "
+                            "WHERE instrument=%s AND open_time=%s AND raw IS NULL",
                             (observation.raw, raw_source, raw_received, *key),
                         )
             # A failed/unknown commit raises; downstream publication cannot advance.

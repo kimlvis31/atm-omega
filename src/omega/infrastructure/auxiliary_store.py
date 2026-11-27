@@ -148,13 +148,14 @@ class PostgresAuxiliaryStore:
         written_bytes = None
         try:
             with self.connection.transaction():
+                # The identity lock also serializes writes to compressed revisions.
                 self.connection.execute("SELECT pg_advisory_xact_lock(%s)", (lock_id,))
                 row = self.connection.execute(
                     "SELECT "
                     + _COLUMNS
                     + " FROM market.auxiliary_minutes WHERE "
                     + _KEY
-                    + " ORDER BY revision DESC LIMIT 1 FOR UPDATE",
+                    + " ORDER BY revision DESC LIMIT 1",
                     key,
                 ).fetchone()
                 previous, revision = None, 1

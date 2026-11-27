@@ -347,14 +347,14 @@ class PostgresBarSeriesStore:
         existing = {}
         conflicts = sorted(first_by_key.keys() - inserted)
         if conflicts:
-            # A fresh statement sees concurrent commits that caused ON CONFLICT to skip.
+            # Re-read immutable bars after the unique insert has resolved concurrent commits.
             columns = ",".join(f"bar.{name}" for name in OBSERVATION_COLUMNS.split(","))
             rows = self.connection.execute(
                 f"""
                 SELECT bar.series_id,{columns}
                 FROM unnest(%s::text[], %s::timestamptz[]) AS keys(series_id,open_time)
                 JOIN market.series_candles AS bar USING (series_id,open_time)
-                ORDER BY bar.series_id,bar.open_time FOR UPDATE OF bar
+                ORDER BY bar.series_id,bar.open_time
                 """,
                 tuple(map(list, zip(*conflicts, strict=True))),
             ).fetchall()
