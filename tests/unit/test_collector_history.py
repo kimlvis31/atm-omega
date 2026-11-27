@@ -33,7 +33,7 @@ def test_confirmed_origins_do_not_query_binance_again():
         def execute(self, query):
             assert query.startswith("SELECT")
             return tuple(
-                (INSTRUMENT.key, channel, "verified", None)
+                (INSTRUMENT.key, channel, "verified", None, 60_000)
                 for channel in ("kline", "agg_trade", "depth", "metrics")
             )
 
@@ -165,3 +165,33 @@ def test_auxiliary_stream_retries_same_batch_and_flushes_shutdown_queue():
             instance.storage.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_failed_archive_listing_does_not_record_source_absence(tmp_path, monkeypatch):
+    start = DAY
+    end = start + DAY
+    now = end + MINUTE
+    probes = []
+
+    def files(*_):
+        if not probes:
+            raise OSError("temporary list failure")
+        return ()
+
+    def note(*args):
+        probes.append(args)
+
+    monkeypatch.setattr(DailyAuxiliaryHistory, "_end", staticmethod(lambda *_: end))
+    monkeypatch.setattr("omega.runtime.collector_aux_history.note_source_check", note)
+    history = DailyAuxiliaryHistory(
+        tmp_path, SimpleNamespace(files=files), {}, clock_ms=lambda: now, stop=Event()
+    )
+    with pytest.raises(OSError):
+        history.step(None, None, INSTRUMENT, "depth", start)
+    assert probes == []
+    assert history.progress[INSTRUMENT.key + "|depth"]["next_ms"] == start
+
+    probes.append("listing now succeeds")
+    assert history.step(None, None, INSTRUMENT, "depth", start) is False
+    assert probes[1][3:] == ("vision", start, end, "unlisted", now)
+    assert history.progress[INSTRUMENT.key + "|depth"]["state"] == "waiting_archive"

@@ -45,6 +45,19 @@ When Binance returns different totals, the measured trade-flow row and its
 source receipts are retained as partial. Zero-volume minutes are verified
 from committed candles.
 
+Coverage is stored in market.collector_coverage as half-open UTC millisecond ranges.
+Kline uses the series ID as scope_key and an empty dataset. Auxiliary data uses
+the instrument key and exact dataset, so archived and streamed depth stay distinct.
+The latest persisted revision determines the observed and incomplete ranges.
+confirmed_empty marks verified zero-trade slots and is a subset of observed.
+A source check lives separately in market.collector_history_checks and records
+the source, range, result and check time. An unlisted Vision file or an empty
+REST response describes that source at check time. Unchecked gaps remain unknown.
+The migration seeds coverage from the existing rows without classifying old gaps.
+Coverage is updated once per insert statement in the same transaction as the rows.
+The recent trade repair selects candidates from the range difference, then reads
+only the relevant candle volumes.
+
 The checkout lives on the deployment host's Desktop. Keep the original
 series boundary in `state/kbeeshome-collector/deploy.env` as
 `OMEGA_EFFECTIVE_FROM_MS`. The runtime database configuration belongs at

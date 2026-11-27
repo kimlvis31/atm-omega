@@ -36,6 +36,11 @@ from omega.infrastructure.binance.transport import UrllibTransport
 from omega.infrastructure.binance.vision import DAY, VisionArchive
 from omega.infrastructure.binance.vision_market import VisionMarketData
 from omega.infrastructure.candles import connect_database
+from omega.infrastructure.collector_coverage import (
+    first_covered,
+    note_source_check,
+    recent_unconfirmed_trades,
+)
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import verify_schema
 from omega.infrastructure.raw_archive import FileRawArchive
@@ -145,25 +150,27 @@ class HistoryWorker:
             market: VisionMarketData(rest, self.vision) for market, rest in self.rest.items()
         }
         self.raw = FileRawArchive(root / "history-repair-raw")
+        self.origins = None
         self.repair_budget = RequestBudget((Window("repair", 120, 60),))
         self.auxiliary_history = DailyAuxiliaryHistory(
             root, self.vision, self.aux, clock_ms=clock_ms, stop=stop
         )
 
     def check_origins(self, db):
-        cached = {
-            (key, channel): (state, next_check)
-            for key, channel, state, next_check in db.execute(
-                "SELECT instrument,channel,discovery_state,next_check_ms "
-                "FROM market.binance_history_origins"
-            )
-        }
+        if getattr(self, "origins", None) is None:
+            self.origins = {
+                (key, channel): (state, next_check, first)
+                for key, channel, state, next_check, first in db.execute(
+                    "SELECT instrument,channel,discovery_state,next_check_ms,first_ms "
+                    "FROM market.binance_history_origins"
+                )
+            }
         for channel in CHANNELS:
             for instrument in self.inventory:
                 if self.stop.is_set():
                     return
                 now = clock_ms()
-                existing = cached.get((instrument.key, channel))
+                existing = self.origins.get((instrument.key, channel))
                 if existing is not None and (existing[0] == "verified" or existing[1] > now):
                     continue
                 try:
@@ -177,11 +184,10 @@ class HistoryWorker:
                         evidence["retry_after"] = exc.retry_after or 0
                 if state == "unavailable" and channel in {"depth", "agg_trade"}:
                     live_channel = "depth" if channel == "depth" else "trade_flow"
-                    first = db.execute(
-                        "SELECT (extract(epoch FROM min(open_time)) * 1000)::bigint "
-                        "FROM market.auxiliary_minutes WHERE instrument=%s AND channel=%s",
-                        (instrument.key, live_channel),
-                    ).fetchone()[0]
+                    suffix = ":binance_depth_ws_v1" if channel == "depth" else ":aggTrade"
+                    first = first_covered(
+                        db, instrument.key, live_channel, (instrument.key + suffix,)
+                    )
                     evidence["live_first_ms"] = first
                 checked = clock_ms()
                 delay = max(300_000, int(evidence.get("retry_after", 0) * 1000))
@@ -212,6 +218,7 @@ class HistoryWorker:
                         next_check,
                     ),
                 )
+                self.origins[(instrument.key, channel)] = (state, next_check, first)
                 log(
                     "origin",
                     instrument=instrument.key,
@@ -303,10 +310,33 @@ class HistoryWorker:
                 return False
             store.import_batch(complete, tuple(batch[offset : offset + BAR_WRITE_BATCH_SIZE]))
         missing = (until - cursor) // MINUTE - len(batch)
+        archived = bool(self.vision.files(instrument, "kline", cursor, until)) if missing else False
         # Commit the cursor only after the imported data is readable. Preserve exact
         # unresolved ranges for recheck instead of generating bars in missing slots.
         with db.transaction():
             if missing:
+                checked = clock_ms()
+                note_source_check(
+                    db,
+                    instrument,
+                    "kline",
+                    "vision",
+                    cursor,
+                    until,
+                    ("incomplete" if batch else "no_rows") if archived else "unlisted",
+                    checked,
+                )
+                if not archived:
+                    note_source_check(
+                        db,
+                        instrument,
+                        "kline",
+                        "rest",
+                        cursor,
+                        until,
+                        "incomplete" if batch else "no_rows",
+                        checked,
+                    )
                 actual = {item.candle.open_time_ms for item in batch}
                 gap_start = None
                 for opening in range(cursor, until + MINUTE, MINUTE):
@@ -462,25 +492,7 @@ class HistoryWorker:
         now = clock_ms()
         by_id = {series: instrument for instrument, series in self.inventory.items()}
         try:
-            candidates = db.execute(
-                """SELECT bar.series_id,(extract(epoch FROM bar.open_time)*1000)::bigint,bar.v
-                   FROM unnest(%s::text[],%s::text[]) AS target(instrument,series_id)
-                   JOIN market.series_candles AS bar ON bar.series_id=target.series_id
-                   LEFT JOIN LATERAL (
-                       SELECT convert_from(a.payload,'UTF8')::jsonb
-                               ->'observation'->>'quality' AS quality
-                       FROM market.auxiliary_minutes AS a
-                       WHERE a.instrument=target.instrument AND a.channel='trade_flow'
-                         AND a.dataset=target.instrument||':aggTrade'
-                         AND a.open_time=bar.open_time
-                       ORDER BY a.revision DESC LIMIT 1
-                   ) AS flow ON true
-                   WHERE bar.open_time>=now()-interval '1 day'
-                     AND bar.open_time<now()-interval '3 minutes'
-                     AND flow.quality IS DISTINCT FROM 'observed'
-                   ORDER BY bar.open_time DESC,bar.series_id LIMIT 60""",
-                ([instrument.key for instrument in by_id.values()], list(by_id)),
-            ).fetchall()
+            candidates = recent_unconfirmed_trades(db, by_id, now, self.retry)
         except QueryCanceled:
             log("trade_repair_scan_timeout")
             return
@@ -526,15 +538,14 @@ class HistoryWorker:
                 if now >= next_repair:
                     self.recent_trade_gaps(db, auxiliary)
                     next_repair = clock_ms() + MINUTE
-                if now >= next_discovery:
+                if self.origins is None or now >= next_discovery:
                     self.check_origins(db)
                     next_discovery = clock_ms() + MINUTE
-                known = dict(
-                    db.execute(
-                        """SELECT instrument,first_ms FROM market.binance_history_origins
-                       WHERE channel='kline' AND discovery_state='verified'"""
-                    ).fetchall()
-                )
+                known = {
+                    key: first
+                    for (key, channel), (state, _, first) in self.origins.items()
+                    if channel == "kline" and state == "verified"
+                }
                 progressed = False
                 for instrument in self.inventory:
                     if self.stop.is_set():
@@ -558,11 +569,11 @@ class HistoryWorker:
                     if clock_ms() >= next_repair:
                         self.recent_trade_gaps(db, auxiliary)
                         next_repair = clock_ms() + MINUTE
-                histories = db.execute(
-                    """SELECT instrument,channel,first_ms FROM market.binance_history_origins
-                       WHERE discovery_state='verified' AND channel<>'kline'
-                       ORDER BY instrument,channel"""
-                ).fetchall()
+                histories = sorted(
+                    (key, channel, first)
+                    for (key, channel), (state, _, first) in self.origins.items()
+                    if channel != "kline" and state == "verified"
+                )
                 by_key = {instrument.key: instrument for instrument in self.inventory}
                 for key, channel, first in histories:
                     if self.stop.is_set():

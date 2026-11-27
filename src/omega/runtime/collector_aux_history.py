@@ -10,6 +10,11 @@ from omega.domain.market_inputs import AuxiliaryInput, TradeFlowEvent
 from omega.domain.models import decimal
 from omega.infrastructure.auxiliary_store import AUXILIARY_BATCH_SIZE
 from omega.infrastructure.binance.vision import DAY
+from omega.infrastructure.collector_coverage import (
+    clear_unlisted_check,
+    first_covered,
+    note_source_check,
+)
 from omega.runtime.settings import atomic_json
 
 MINUTE = 60_000
@@ -102,13 +107,14 @@ class DailyAuxiliaryHistory:
             ),
             "depth": (instrument.key + ":binance_depth_ws_v1",),
         }[channel]
-        values = db.execute(
-            """SELECT (extract(epoch FROM min(open_time))*1000)::bigint
-               FROM market.auxiliary_minutes WHERE instrument=%s AND dataset=ANY(%s)
-               GROUP BY dataset""",
-            (instrument.key, list(sources)),
-        ).fetchall()
-        return max(row[0] for row in values) if len(values) == len(sources) else None
+        native_channel = "trade_flow" if channel == "agg_trade" else channel
+        if channel == "metrics":
+            available = [
+                first_covered(db, instrument.key, name, (source,))
+                for name, source in zip(("open_interest", "long_short_ratio"), sources, strict=True)
+            ]
+            return None if None in available else max(available)
+        return first_covered(db, instrument.key, native_channel, sources)
 
     def _trade_day(self, db, instrument, start, end):
         checkpoint = db.execute(
@@ -312,6 +318,10 @@ class DailyAuxiliaryHistory:
         end = min(job["end_ms"], (start // DAY + 1) * DAY)
         archive = self.vision.files(instrument, channel, start, end)
         from_rest = not archive and channel == "metrics" and start >= now - 27 * DAY
+        if not archive:
+            note_source_check(
+                db, instrument, channel, "vision", start, end, "unlisted", self.clock_ms()
+            )
         if not archive and not from_rest and end >= now - 2 * DAY:
             job.update(check_again_ms=now + 60 * MINUTE, state="waiting_archive")
             self._save()
@@ -335,7 +345,20 @@ class DailyAuxiliaryHistory:
             batch = observations[offset : offset + AUXILIARY_BATCH_SIZE]
             written += store.put_history_batch(instrument, batch)
         unresolved = max(0, (end - start) // interval - verified)
+        if archive and job.get("state") == "waiting_archive":
+            clear_unlisted_check(db, instrument, channel, start, end)
         if unresolved:
+            if archive or from_rest:
+                note_source_check(
+                    db,
+                    instrument,
+                    channel,
+                    "vision" if archive else "rest",
+                    start,
+                    end,
+                    "incomplete" if observations else "no_rows",
+                    self.clock_ms(),
+                )
             path = (
                 self.root
                 / "auxiliary-history-unresolved"

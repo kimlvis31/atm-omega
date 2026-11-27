@@ -24,10 +24,17 @@ from omega.application.collection import MinuteCollector
 from omega.domain.bar_schedule import BarSchedule
 from omega.domain.bar_series import BarSeries, SeriesCandle, SeriesObservation
 from omega.domain.errors import ProtocolError, StorageError, ValidationError
+from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Candle, Instrument, Market, decimal
+from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
 from omega.infrastructure.bar_series_store import PostgresBarSeriesStore
 from omega.infrastructure.bar_series_transfer import LEGACY_FEED, transfer_legacy_window
 from omega.infrastructure.candles import PostgresCandleStore, connect_database
+from omega.infrastructure.collector_coverage import (
+    first_covered,
+    note_source_check,
+    recent_unconfirmed_trades,
+)
 from omega.infrastructure.market_data import MarketDataBackend
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import migrate
@@ -1155,3 +1162,76 @@ def test_one_native_collector_runs_spot_and_futures_together(
         assert close_price(instrument.key) == decimal("9.999")
     finally:
         reader.close()
+
+
+def test_native_coverage_tracks_commits_revisions_and_candidate_gaps(settings, instrument):
+    minute = 60_000
+    opening = 1_700_000_040_000
+    now = opening + 10 * minute
+    series = BarSeries(instrument, "binance-public", (minute,), BarSchedule(), opening)
+    source = instrument.key + ":aggTrade"
+    price = decimal("10")
+
+    def bar(index):
+        start = opening + index * minute
+        return SeriesObservation(
+            SeriesCandle(series, start, start + minute, price, price, price, price, price),
+            "rest",
+            now,
+        )
+
+    def trade(index, quality="observed", *, empty=False):
+        start = opening + index * minute
+        return AuxiliaryInput(
+            "trade_flow",
+            (("AGGTRADE_KLINE_ZERO", 1), ("AGGTRADE_EVENTCOUNT", 0))
+            if empty
+            else (("AGGTRADE_EVENTCOUNT", 4),),
+            start,
+            start + minute,
+            start + minute,
+            now,
+            quality,
+            decimal("1" if quality == "observed" else "0.5"),
+            source,
+        )
+
+    bars, aux = PostgresBarSeriesStore(settings), PostgresAuxiliaryStore(settings)
+    try:
+        bars.import_batch(series, (bar(0), bar(1), bar(2), bar(4)))
+        aux.put_live_batch([(instrument, trade(0, empty=True)), (instrument, trade(1, "partial"))])
+        with aux.connection.transaction(force_rollback=True):
+            aux.put_live_batch([(instrument, trade(2))])
+        with bars.connection.transaction(force_rollback=True):
+            bars.import_batch(series, (bar(3),))
+        db = bars.connection
+        assert first_covered(db, instrument.key, "trade_flow", (source,)) == opening
+        row = db.execute(
+            "SELECT observed,incomplete,confirmed_empty FROM market.collector_coverage "
+            "WHERE scope_key=%s AND channel='trade_flow' AND dataset=%s",
+            (instrument.key, source),
+        ).fetchone()
+        assert [[(slot.lower, slot.upper) for slot in span] for span in row] == [
+            [(opening, opening + minute)],
+            [(opening + minute, opening + 2 * minute)],
+            [(opening, opening + minute)],
+        ]
+        targets = {series.series_id: instrument}
+        redo = {(instrument.key, opening + 4 * minute): now + 1}
+        missing = recent_unconfirmed_trades(db, targets, now, redo)
+        assert [row[1] for row in missing] == [opening + 2 * minute, opening + minute]
+
+        repair = replace(trade(1), available_at_ms=now + 1)
+        assert aux.put_history_batch(instrument, [repair]) == 1
+        remaining = recent_unconfirmed_trades(db, targets, now, redo)
+        assert [row[1] for row in remaining] == [opening + 2 * minute]
+        note_source_check(
+            db, instrument, "agg_trade", "vision", opening, opening + minute, "unlisted", now
+        )
+        assert db.execute(
+            "SELECT result,checked_ms FROM market.collector_history_checks WHERE instrument=%s",
+            (instrument.key,),
+        ).fetchone() == ("unlisted", now)
+    finally:
+        bars.close()
+        aux.close()
