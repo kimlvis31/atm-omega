@@ -5,6 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
@@ -18,7 +19,7 @@ from omega.domain.market_inputs import AuxiliaryInput
 from omega.domain.models import Instrument, Market
 from omega.infrastructure.auxiliary_codec import encode_observation
 from omega.infrastructure.auxiliary_store import PostgresAuxiliaryStore
-from omega.infrastructure.candles import connect_database
+from omega.infrastructure.candles import EPOCH, connect_database
 from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import migrate
 from omega.ports.auxiliary import AuxiliaryReadRange
@@ -597,3 +598,111 @@ def test_stream_auxiliary_batch_preserves_first_receipt_and_revises_changed_metr
     assert read(store, instrument, statistic).observation == statistic
     assert read(store, instrument, corrected).observation == corrected
     assert store.put_live_batch([(instrument, corrected)]) == 0
+
+
+def test_live_batch_rejects_missing_exact_predecessor_and_rolls_back_all_keys(
+    store, instrument, settings
+):
+    first_value = observation(
+        channel="open_interest", values=(("METRIC_OPENINTEREST", 1),)
+    )
+    first = store.put(instrument, first_value)
+    second_value = replace(
+        first_value,
+        values=(("METRIC_OPENINTEREST", 2),),
+        available_at_ms=START + 120000,
+    )
+    second = store.put(instrument, second_value, expected_previous=first.checksum)
+    third_value = replace(
+        first_value,
+        values=(("METRIC_OPENINTEREST", 3),),
+        available_at_ms=START + 180000,
+    )
+    third = store.put(instrument, third_value, expected_previous=second.checksum)
+
+    other_key = observation(
+        channel="open_interest",
+        source="synthetic_second_segment",
+        window_start_ms=START + 60000,
+        window_end_ms=START + 120000,
+        event_time_ms=START + 120000,
+        available_at_ms=START + 120001,
+        values=(("METRIC_OPENINTEREST", 10),),
+    )
+    store.put(instrument, other_key)
+    other_candidate = replace(
+        other_key,
+        values=(("METRIC_OPENINTEREST", 11),),
+        available_at_ms=other_key.available_at_ms + 1,
+    )
+    # A third minute/channel segment makes the query span independent identities.
+    store.put(
+        instrument,
+        observation(
+            channel="long_short_ratio",
+            source="synthetic_third_segment",
+            window_start_ms=START + 120000,
+            window_end_ms=START + 180000,
+            event_time_ms=START + 180000,
+            available_at_ms=START + 180001,
+            values=(("LONG_SHORT_RATIO", Decimal("1.25")),),
+        ),
+    )
+
+    opening = EPOCH + timedelta(milliseconds=START)
+    with connect_database(settings) as connection:
+        connection.execute(
+            "UPDATE market.auxiliary_minutes SET previous_checksum=%s "
+            "WHERE instrument=%s AND channel=%s AND dataset=%s AND open_time=%s AND revision=3",
+            (first.checksum, instrument.key, third_value.channel, third_value.source, opening),
+        )
+        connection.execute(
+            "DELETE FROM market.auxiliary_minutes "
+            "WHERE instrument=%s AND channel=%s AND dataset=%s AND open_time=%s AND revision=2",
+            (instrument.key, second_value.channel, second_value.source, opening),
+        )
+
+    corrupt_candidate = replace(
+        third_value,
+        values=(("METRIC_OPENINTEREST", 4),),
+        available_at_ms=START + 240000,
+    )
+    with pytest.raises(StorageError):
+        store.put_live_batch([(instrument, corrupt_candidate), (instrument, other_candidate)])
+
+    # The corrupt row still points to r1 while r2 is absent, and the valid
+    # second key's otherwise applicable revision was rolled back with the batch.
+    with connect_database(settings) as connection:
+        assert connection.execute(
+            "SELECT revision,checksum,previous_checksum FROM market.auxiliary_minutes "
+            "WHERE instrument=%s AND channel=%s AND dataset=%s AND open_time=%s "
+            "ORDER BY revision",
+            (instrument.key, third_value.channel, third_value.source, opening),
+        ).fetchall() == [(1, first.checksum, None), (3, third.checksum, first.checksum)]
+    assert read(store, instrument, other_candidate).revision == 1
+    assert store.get(
+        instrument,
+        "long_short_ratio",
+        "synthetic_third_segment",
+        START + 120000,
+        as_of_ms=START + 180001,
+    ).revision == 1
+
+
+def test_valid_two_revision_live_key_replay_does_not_advance(store, instrument):
+    original = observation(
+        channel="open_interest", values=(("METRIC_OPENINTEREST", 7),)
+    )
+    first = store.put(instrument, original)
+    revised = replace(
+        original,
+        values=(("METRIC_OPENINTEREST", 8),),
+        available_at_ms=original.available_at_ms + 1,
+    )
+    second = store.put(instrument, revised, expected_previous=first.checksum)
+
+    assert second.revision == 2 and second.inserted
+    assert store.put_live_batch([(instrument, revised)]) == 0
+    stored = read(store, instrument, revised)
+    assert stored.revision == 2
+    assert stored.checksum == second.checksum and stored.previous_checksum == first.checksum

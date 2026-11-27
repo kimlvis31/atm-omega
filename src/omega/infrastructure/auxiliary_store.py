@@ -257,30 +257,46 @@ class PostgresAuxiliaryStore:
                     "FROM unnest(%s::bigint[]) AS locks(lock_id) ORDER BY lock_id",
                     (lock_ids,),
                 )
+                # Explicit bounds let Timescale prune chunks before joining the batch.
                 rows = self.connection.execute(
                     """
-                    SELECT requested.*, latest.revision, latest.checksum, latest.previous_checksum,
-                           latest.payload, latest.available_ms, latest.event_ms,
-                           prior.checksum, prior.available_ms
-                    FROM unnest(%s::text[], %s::text[], %s::text[], %s::timestamptz[])
-                        AS requested(instrument,channel,dataset,open_time)
-                    CROSS JOIN LATERAL (
-                        SELECT revision,checksum,previous_checksum,payload,available_ms,event_ms
-                        FROM market.auxiliary_minutes
-                        WHERE instrument=requested.instrument AND channel=requested.channel
-                          AND dataset=requested.dataset AND open_time=requested.open_time
-                        ORDER BY revision DESC LIMIT 1
-                    ) AS latest
-                    LEFT JOIN LATERAL (
-                        SELECT checksum,available_ms
-                        FROM market.auxiliary_minutes
-                        WHERE instrument=requested.instrument AND channel=requested.channel
-                          AND dataset=requested.dataset AND open_time=requested.open_time
-                          AND revision=latest.revision-1
-                        LIMIT 1
-                    ) AS prior ON latest.revision>1
+                    WITH matching_revisions AS (
+                        SELECT stored.instrument, stored.channel, stored.dataset, stored.open_time,
+                               stored.revision, stored.checksum, stored.previous_checksum,
+                               stored.payload, stored.available_ms, stored.event_ms,
+                               row_number() OVER revisions AS position,
+                               lead(stored.revision) OVER revisions AS prior_revision,
+                               lead(stored.checksum) OVER revisions AS prior_checksum,
+                               lead(stored.available_ms) OVER revisions AS prior_available_ms
+                        FROM market.auxiliary_minutes AS stored
+                        JOIN unnest(%s::text[], %s::text[], %s::text[], %s::timestamptz[])
+                            AS requested(instrument,channel,dataset,open_time)
+                            USING (instrument,channel,dataset,open_time)
+                        WHERE stored.open_time BETWEEN %s AND %s
+                          AND stored.instrument = ANY(%s::text[])
+                          AND stored.channel = ANY(%s::text[])
+                          AND stored.dataset = ANY(%s::text[])
+                        WINDOW revisions AS (
+                            PARTITION BY stored.instrument, stored.channel,
+                                         stored.dataset, stored.open_time
+                            ORDER BY stored.revision DESC
+                        )
+                    )
+                    SELECT instrument,channel,dataset,open_time,revision,checksum,previous_checksum,
+                           payload,available_ms,event_ms,
+                           CASE WHEN prior_revision=revision-1 THEN prior_checksum END,
+                           CASE WHEN prior_revision=revision-1 THEN prior_available_ms END
+                    FROM matching_revisions WHERE position=1
                     """,
-                    keys,
+                    (
+                        *keys,
+                        min(keys[3]),
+                        max(keys[3]),
+                        sorted(set(keys[0])),
+                        sorted(set(keys[1])),
+                        sorted(set(keys[2])),
+                    ),
+                    prepare=False,
                 ).fetchall()
                 latest_by_key = {row[:4]: row[4:] for row in rows}
                 inserts = []
