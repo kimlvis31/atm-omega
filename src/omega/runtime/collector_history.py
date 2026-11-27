@@ -38,6 +38,7 @@ from omega.infrastructure.postgres.config import load_database_settings
 from omega.infrastructure.postgres.schema import verify_schema
 from omega.infrastructure.raw_archive import FileRawArchive
 from omega.ports.raw_data import PublicRawResponse
+from omega.runtime.collector_aux_history import DailyAuxiliaryHistory
 from omega.runtime.control import InstanceLock
 from omega.runtime.settings import atomic_json
 
@@ -142,6 +143,9 @@ class HistoryWorker:
         }
         self.raw = FileRawArchive(root / "history-repair-raw")
         self.repair_budget = RequestBudget((Window("repair", 120, 60),))
+        self.auxiliary_history = DailyAuxiliaryHistory(
+            root, self.vision, self.aux, clock_ms=clock_ms, stop=stop
+        )
 
     def check_origins(self, db):
         cached = {
@@ -334,6 +338,32 @@ class HistoryWorker:
         prior = store.get(instrument, "trade_flow", source, opening, as_of_ms=clock_ms())
         if prior is not None and prior.observation.quality == "observed":
             return True
+        if volume == 0:
+            if prior is not None and prior.observation.mapping().get("AGGTRADE_EVENTCOUNT", 0):
+                raise ProtocolError("closed zero-volume candle conflicts with saved trades")
+            observation = AuxiliaryInput(
+                "trade_flow",
+                (*trade_flow_values(()), ("AGGTRADE_KLINE_ZERO", 1)),
+                opening,
+                opening + MINUTE,
+                opening + MINUTE,
+                clock_ms(),
+                "observed",
+                Decimal(1),
+                source,
+            )
+            try:
+                store.put(
+                    instrument,
+                    observation,
+                    expected_previous=None if prior is None else prior.checksum,
+                )
+            except ProtocolError:
+                latest = store.get(instrument, "trade_flow", source, opening, as_of_ms=clock_ms())
+                if latest is None or latest.observation.mapping().get("AGGTRADE_EVENTCOUNT") != 0:
+                    raise
+            log("trade_confirmed_empty", instrument=instrument.key, open_ms=opening)
+            return True
         end, pending = opening + MINUTE, []
         client = self.aux[instrument.market]
         archive_ids = []
@@ -414,7 +444,7 @@ class HistoryWorker:
         candidates = db.execute(
             """SELECT series_id, (extract(epoch FROM open_time)*1000)::bigint, v
                FROM market.series_candles AS bar JOIN market.bar_series AS series USING (series_id)
-               WHERE series_id=ANY(%s) AND v>0 AND open_time>=now()-interval '1 day'
+               WHERE series_id=ANY(%s) AND open_time>=now()-interval '1 day'
                  AND open_time<now()-interval '3 minutes'
                  AND open_time >= (SELECT min(a.open_time) FROM market.auxiliary_minutes a
                        WHERE a.instrument=series.definition->>'instrument'
@@ -497,6 +527,38 @@ class HistoryWorker:
                         log(
                             "kline_history_error",
                             instrument=instrument.key,
+                            error=type(exc).__name__,
+                        )
+                    if clock_ms() >= next_repair:
+                        self.recent_trade_gaps(db, auxiliary)
+                        next_repair = clock_ms() + MINUTE
+                histories = db.execute(
+                    """SELECT instrument,channel,first_ms FROM market.binance_history_origins
+                       WHERE discovery_state='verified' AND channel<>'kline'
+                       ORDER BY instrument,channel"""
+                ).fetchall()
+                by_key = {instrument.key: instrument for instrument in self.inventory}
+                for key, channel, first in histories:
+                    if self.stop.is_set():
+                        return
+                    if key not in by_key:
+                        continue
+                    try:
+                        result = self.auxiliary_history.step(
+                            db, auxiliary, by_key[key], channel, first
+                        )
+                        if result:
+                            progressed = True
+                            log("auxiliary_batch", instrument=key, channel=channel, **result)
+                    except RateLimited as exc:
+                        log("backfill_throttled", seconds=exc.retry_after)
+                        self.stop.wait(max(1, min(60, exc.retry_after or 0)))
+                        break
+                    except (OSError, OmegaError, ArithmeticError) as exc:
+                        log(
+                            "auxiliary_history_error",
+                            instrument=key,
+                            channel=channel,
                             error=type(exc).__name__,
                         )
                     if clock_ms() >= next_repair:
