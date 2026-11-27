@@ -11,9 +11,13 @@ marks unproven minutes partial. Depth starts with a 1,000-level REST snapshot,
 checks diff continuity, and stores minute-end price-distance bands from
 the synchronized book. Limited book coverage or a stale sample is partial.
 The 10 USD-M symbols also store five-minute open interest and account
-long/short ratio at the provider's timestamps. No synthetic one-minute
-metrics or historical depth are emitted. Auxiliary REST calls use the
-same 600-weight-per-minute ledger as candles, with a separate limit of
+long/short ratio at the provider's timestamps. The database function
+`market.eta_metric_minutes(instrument_key, start_ms, end_ms, as_of_ms)`
+maps each matched pair to the five closed minutes in its Eta block. It
+retains both original revisions and returns the later source availability
+time. An incomplete pair is a gap. Existing and newly collected statistics
+use the same mapping. Historical depth is unavailable. Auxiliary REST calls
+use the same 600-weight-per-minute ledger as candles, with a separate limit of
 100 metric requests per five minutes and staggered socket starts.
 
 The checkout lives on the deployment host's Desktop. Keep the original

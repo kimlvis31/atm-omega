@@ -1,7 +1,7 @@
 """Bounded retrospective projections of stored auxiliary observations.
 
-These display series retain actual knowledge metadata. They are neither causal
-strategy inputs nor carried minute samples, and never calculate trading state.
+Display series retain actual knowledge metadata and do not calculate trading state.
+Native Binance metric pairs use the Eta minute mapping.
 """
 
 from decimal import Context, Decimal, localcontext
@@ -243,7 +243,9 @@ def project_auxiliary_series(
             raise ProtocolError("stored chart observation conflicts with its verified query")
         seen.add(observation.window_start_ms)
         opening = observation.window_start_ms // period * period
-        groups.setdefault(opening, []).append((observation, _fields(observation, kind)))
+        groups.setdefault(opening, []).append(
+            (observation.event_time_ms, observation.window_start_ms, _fields(observation, kind))
+        )
         result["lineage"].append(
             {
                 "open_time_ms": observation.window_start_ms,
@@ -255,10 +257,58 @@ def project_auxiliary_series(
             }
         )
     result["lineage"].sort(key=lambda row: row["open_time_ms"])
+    return _finish_series(spec, result, groups, bool(observations))
+
+
+def project_eta_metric_series(spec, rows, *, source, as_of_ms):
+    """Display closed 1m slots from the same paired snapshot used by SQL readers."""
+    result = empty_result(spec, source=source, as_of_ms=as_of_ms, state="unavailable")
+    kind, period = spec["kind"], spec["period_minutes"] * MINUTE
+    groups, seen_minutes, source_blocks = {}, set(), set()
+    for row in rows:
+        opening, metric_time = row["open_ms"], row["metric_time_ms"]
+        available = row["available_ms"]
+        if (
+            opening in seen_minutes
+            or not spec["start_ms"] <= opening < spec["end_ms"]
+            or not metric_time <= opening < metric_time + 5 * MINUTE
+            or not metric_time <= available <= as_of_ms
+            or row["close_ms"] != opening + MINUTE
+            or row["close_ms"] > as_of_ms
+        ):
+            raise ProtocolError("mapped metric minute contradicts its range or availability")
+        seen_minutes.add(opening)
+        fields = {
+            name: _number(Decimal(row["metrics"][name]), unit)
+            for name, unit in UNITS[kind].items()
+            if name in row["metrics"]
+        }
+        groups.setdefault(opening // period * period, []).append((metric_time, opening, fields))
+        if metric_time not in source_blocks:
+            source_blocks.add(metric_time)
+            primary = "open_interest" if kind == "OPENINTEREST" else "long_short"
+            result["lineage"].append(
+                {
+                    "open_time_ms": metric_time,
+                    "available_at_ms": available,
+                    "revision": row[primary + "_revision"],
+                    "checksum": row[primary + "_checksum"],
+                    "open_interest_checksum": row["open_interest_checksum"],
+                    "long_short_checksum": row["long_short_checksum"],
+                    "quality": "observed",
+                    "coverage": "1",
+                }
+            )
+    result["lineage"].sort(key=lambda row: row["open_time_ms"])
+    return _finish_series(spec, result, groups, bool(rows))
+
+
+def _finish_series(spec, result, groups, has_rows):
+    kind, period = spec["kind"], spec["period_minutes"] * MINUTE
     gaps, observed, partial = [], 0, 0
     for opening in range(spec["start_ms"] // period * period, spec["end_ms"], period):
         rows = groups.get(opening, [])
-        complete = [(row, fields) for row, fields in rows if fields]
+        complete = [(event, minute, fields) for event, minute, fields in rows if fields]
         fields = {}
         if opening < spec["start_ms"] or opening + period > spec["end_ms"]:
             # The chart displays complete candle buckets. Preserve raw lineage
@@ -268,15 +318,13 @@ def project_auxiliary_series(
             if len(complete) == spec["period_minutes"]:
                 with localcontext(_MATH):
                     fields = {
-                        name: sum((values[name] for _, values in complete), Decimal(0))
+                        name: sum((values[name] for _, _, values in complete), Decimal(0))
                         for name in UNITS[kind]
                     }
             elif rows:
                 partial += 1
         elif complete:
-            _, fields = max(
-                complete, key=lambda pair: (pair[0].event_time_ms, pair[0].window_start_ms)
-            )
+            _, _, fields = max(complete, key=lambda row: row[:2])
             partial += int(len(complete) != len(rows))
         elif rows:
             partial += 1
@@ -297,6 +345,6 @@ def project_auxiliary_series(
         partial_bars=partial,
     )
     result["state"] = (
-        "ready" if not gaps and not partial else "partial" if observations else "unavailable"
+        "ready" if not gaps and not partial else "partial" if has_rows else "unavailable"
     )
     return result

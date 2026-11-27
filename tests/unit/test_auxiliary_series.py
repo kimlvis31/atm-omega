@@ -401,3 +401,60 @@ def test_validate_copies_parameters():
     value = spec()
     result = validate_parameters(value, as_of_ms=NOW)
     assert result == value and result is not value
+
+
+def test_eta_chart_reads_mapped_minutes_inside_a_bucket_with_both_native_checksums(tmp_path):
+    class MappedStore(Store):
+        def read_eta_metric_minutes(self, instrument, start_ms, end_ms, *, as_of_ms):
+            assert (instrument, start_ms, end_ms, as_of_ms) == (
+                INSTRUMENT.key,
+                MINUTE,
+                5 * MINUTE,
+                NOW,
+            )
+            return tuple(
+                {
+                    "open_ms": opening,
+                    "close_ms": opening + MINUTE,
+                    "metric_time_ms": 0,
+                    "available_ms": 2 * MINUTE,
+                    "metrics": {
+                        "METRIC_OPENINTEREST": "123.40",
+                        "METRIC_OPENINTERESTVALUE": "200",
+                        "METRIC_LONGSHORTRATIO": "2",
+                    },
+                    "open_interest_revision": 1,
+                    "long_short_revision": 2,
+                    "open_interest_checksum": "a" * 64,
+                    "long_short_checksum": "b" * 64,
+                }
+                for opening in range(start_ms, end_ms, MINUTE)
+            )
+
+    store = MappedStore()
+    view = ChartObservationsView(tmp_path, lambda: store, lambda: NOW)
+    result = view.read(spec(start_ms=MINUTE))
+    assert result["state"] == "ready"
+    assert result["series"]["METRIC_OPENINTEREST"] == [
+        [opening, "123.40"] for opening in range(MINUTE, 5 * MINUTE, MINUTE)
+    ]
+    (original,) = result["lineage"]
+    assert original["open_time_ms"] == 0
+    assert original["available_at_ms"] == 2 * MINUTE
+    assert original["open_interest_checksum"] == "a" * 64
+    assert original["long_short_checksum"] == "b" * 64
+    assert store.calls == [] and store.closed == 1
+
+
+def test_eta_chart_does_not_display_unpaired_native_statistics(tmp_path):
+    class NoPairStore(Store):
+        def read_eta_metric_minutes(self, *args, **kwargs):
+            return ()
+
+    store = NoPairStore(
+        (row(values={"METRIC_OPENINTEREST": Decimal(2), "SOURCE_PERIOD_MS": 5 * MINUTE}),)
+    )
+    view = ChartObservationsView(tmp_path, lambda: store, lambda: NOW)
+    result = view.read(spec())
+    assert result["gaps"] == [[0, 5 * MINUTE]]
+    assert result["series"]["METRIC_OPENINTEREST"] == []

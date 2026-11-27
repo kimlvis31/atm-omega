@@ -234,6 +234,21 @@ class PostgresAuxiliaryStore:
     def close(self):
         self.connection.close()
 
+    def read_eta_metric_minutes(self, instrument, start_ms, end_ms, *, as_of_ms):
+        from psycopg.rows import dict_row
+
+        try:
+            with self.connection.transaction():
+                self.connection.execute("SET TRANSACTION READ ONLY")
+                with self.connection.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        "SELECT * FROM market.eta_metric_minutes(%s, %s, %s, %s)",
+                        (instrument, start_ms, end_ms, as_of_ms),
+                    )
+                    return tuple(cursor.fetchall())
+        except self._database_error:
+            raise StorageError("Eta metric minute query failed") from None
+
     def read_ranges(self, ranges, *, as_of_ms, limit=10000):
         if (
             type(ranges) is not tuple

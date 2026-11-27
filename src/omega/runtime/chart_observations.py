@@ -9,6 +9,7 @@ from omega.application.auxiliary_series import (
     auxiliary_ranges,
     empty_result,
     project_auxiliary_series,
+    project_eta_metric_series,
     unsupported_reason,
     validate_parameters,
 )
@@ -45,13 +46,7 @@ class ChartObservationsView:
         store = None
         try:
             store = self.store_factory()
-            rows = store.read_ranges(auxiliary_ranges(spec, source), as_of_ms=as_of, limit=10000)
-            if not rows and spec["kind"] == "OPENINTEREST" and "source" not in spec:
-                source = spec["instrument"] + ":open_interest"
-                rows = store.read_ranges(
-                    auxiliary_ranges(spec, source), as_of_ms=as_of, limit=10000
-                )
-            result = project_auxiliary_series(spec, rows, source=source, as_of_ms=as_of)
+            result = self._read_series(store, spec, source, as_of)
         except Exception:
             result = empty_result(
                 spec,
@@ -73,6 +68,30 @@ class ChartObservationsView:
                         warning="Stored auxiliary chart connection cleanup failed.",
                     )
         return result
+
+    @staticmethod
+    def _read_series(store, spec, source, as_of):
+        kind, instrument = spec["kind"], spec["instrument"]
+        mapped_read = getattr(store, "read_eta_metric_minutes", None)
+        eta_metrics = (
+            kind in {"OPENINTEREST", "LONGSHORTRATIO"}
+            and source == instrument + ":" + KINDS[kind][1]
+            and callable(mapped_read)
+        )
+        if eta_metrics:
+            mapped = mapped_read(instrument, spec["start_ms"], spec["end_ms"], as_of_ms=as_of)
+            if mapped:
+                return project_eta_metric_series(spec, mapped, source=source, as_of_ms=as_of)
+        rows = store.read_ranges(auxiliary_ranges(spec, source), as_of_ms=as_of, limit=10000)
+        if eta_metrics and any(
+            row.observation.mapping().get("SOURCE_PERIOD_MS") == 300000 for row in rows
+        ):
+            # An unpaired native snapshot must stay a gap, including in the individual charts.
+            return project_eta_metric_series(spec, (), source=source, as_of_ms=as_of)
+        if not rows and kind == "OPENINTEREST" and "source" not in spec:
+            source = instrument + ":open_interest"
+            rows = store.read_ranges(auxiliary_ranges(spec, source), as_of_ms=as_of, limit=10000)
+        return project_auxiliary_series(spec, rows, source=source, as_of_ms=as_of)
 
     def close(self):
         """No persistent connection or worker is retained by this view."""
