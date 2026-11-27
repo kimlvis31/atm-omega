@@ -1,7 +1,9 @@
 """Optional authenticated read-only API hosted by the standalone collector."""
 
 import hmac
+import os
 import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -46,6 +48,13 @@ def read_api_token(path: Path) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token):
         raise ValidationError("invalid collector API token file")
     return token
+
+
+class _CollectorHTTPServer(BoundedHTTPServer):
+    def server_bind(self):
+        if os.name != "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        super().server_bind()
 
 
 class CollectorAPIServer:
@@ -148,7 +157,7 @@ class CollectorAPIServer:
                 except OSError:
                     pass
 
-        self.server = BoundedHTTPServer(("127.0.0.1", port), Handler)
+        self.server = _CollectorHTTPServer(("127.0.0.1", port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._closed = False
 
