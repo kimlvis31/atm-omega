@@ -2,7 +2,7 @@
 
 import json
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from threading import Lock
 
 from omega.domain.errors import StorageError, ValidationError
@@ -10,6 +10,11 @@ from omega.infrastructure.candles import connect_database
 
 BACKFILL_PROGRESS_PATH = "/api/collector/v2/backfill-progress"
 WINDOWS = (60, 300)
+EMA_INTERVAL_MS = 100
+EMA_SPAN = 100
+EMA_ALPHA = 2 / (EMA_SPAN + 1)
+_TICKS_PER_SECOND = 1000 // EMA_INTERVAL_MS
+_TICK_NS = EMA_INTERVAL_MS * 1_000_000
 MINUTE = 60_000
 GROUPS = ("kline", "agg_trade", "depth", "metrics")
 STORAGE_GROUP = {
@@ -23,27 +28,52 @@ SCOPES = ("backfill", "live", "repair")
 
 
 class TransferMeter:
-    """Use one monotonic time window for all lanes, including gaps between commits."""
+    """Track bytes committed in shared, monotonic 100 ms periods."""
 
-    def __init__(self, clock=time.monotonic):
-        self.clock = clock
-        self.started = int(clock())
+    def __init__(self, clock=None):
+        self.clock_ns = time.monotonic_ns if clock is None else lambda: round(clock() * 1e9)
+        self.started = self.clock_ns() // _TICK_NS
         self.lock = Lock()
         self.buckets = OrderedDict()
         self.backfill_sizes = {}
+        self.ema_tick = self.started
+        self.ema_rates = {}
 
-    def _prune(self, second):
-        while self.buckets and next(iter(self.buckets)) < second - max(WINDOWS):
+    def _prune(self, tick):
+        cutoff = tick - max(WINDOWS) * _TICKS_PER_SECOND
+        while self.buckets and next(iter(self.buckets)) < cutoff:
             self.buckets.popitem(last=False)
+
+    def _advance_ema(self, stop):
+        if stop <= self.ema_tick:
+            return
+        bucket = self.buckets.get(self.ema_tick, {})
+        keep = 1 - EMA_ALPHA
+        # During idle time, apply all skipped zero samples in one step.
+        idle_decay = keep ** (stop - self.ema_tick - 1)
+        self.ema_rates = (
+            {
+                key: (
+                    keep * self.ema_rates.get(key, 0)
+                    + EMA_ALPHA * bucket.get(key, 0) * _TICKS_PER_SECOND
+                )
+                * idle_decay
+                for key in self.ema_rates.keys() | bucket.keys()
+            }
+            if idle_decay
+            else {}
+        )
+        self.ema_tick = stop
 
     def record(self, scope, storage_channel, rows, size):
         channel = STORAGE_GROUP.get(storage_channel)
         if channel is None or not rows or not size:
             return
         with self.lock:
-            second = int(self.clock())
-            self._prune(second)
-            bucket = self.buckets.setdefault(second, {})
+            tick = self.clock_ns() // _TICK_NS
+            self._advance_ema(tick)
+            self._prune(tick)
+            bucket = self.buckets.setdefault(tick, {})
             key = (scope, channel)
             bucket[key] = bucket.get(key, 0) + size
             if scope == "backfill":
@@ -52,39 +82,55 @@ class TransferMeter:
 
     def snapshot(self):
         with self.lock:
-            now = self.clock()
-            stop = int(now)
+            stop, partial_ns = divmod(self.clock_ns(), _TICK_NS)
+            self._advance_ema(stop)
             self._prune(stop)
-            # Exclude the current partial second and divide every lane by the same time.
-            windows = {}
-            for duration in WINDOWS:
-                start = max(stop - duration, self.started)
-                elapsed = stop - start
-                inflight = [rows for second, rows in self.buckets.items() if start <= second < stop]
-                scopes = {}
-                for scope in SCOPES:
-                    by_channel = {
-                        channel: sum(bucket.get((scope, channel), 0) for bucket in inflight)
-                        for channel in GROUPS
-                    }
-                    scopes[scope] = {
-                        "channels": {
-                            name: self._rate(size, elapsed) for name, size in by_channel.items()
-                        },
-                        "total": self._rate(sum(by_channel.values()), elapsed),
-                    }
-                combined = {
-                    channel: sum(scopes[scope]["channels"][channel]["bytes"] for scope in SCOPES)
-                    for channel in GROUPS
-                }
-                scopes["combined"] = {
-                    "channels": {
-                        name: self._rate(size, elapsed) for name, size in combined.items()
-                    },
-                    "total": self._rate(sum(combined.values()), elapsed),
-                }
-                windows[str(duration)] = {"elapsed_seconds": elapsed, **scopes}
-            return windows, self.backfill_sizes.copy(), round((now - stop) * 1000)
+            # Copy closed buckets while locked, then calculate without blocking commits.
+            closed = tuple(bucket for tick, bucket in self.buckets.items() if tick < stop)
+            recent = tuple(
+                bucket
+                for tick, bucket in self.buckets.items()
+                if stop - WINDOWS[0] * _TICKS_PER_SECOND <= tick < stop
+            )
+            samples = self.backfill_sizes.copy()
+            ema_rates = self.ema_rates.copy()
+        windows = {}
+        for duration, buckets in zip(WINDOWS, (recent, closed), strict=True):
+            elapsed = min(stop - self.started, duration * _TICKS_PER_SECOND) / _TICKS_PER_SECOND
+            counted = defaultdict(int)
+            for bucket in buckets:
+                for key, size in bucket.items():
+                    counted[key] += size
+            windows[str(duration)] = {
+                "elapsed_seconds": elapsed,
+                **self._format_scopes(
+                    counted, lambda size, elapsed=elapsed: self._rate(size, elapsed)
+                ),
+            }
+        ema = {
+            "interval_ms": EMA_INTERVAL_MS,
+            "span_samples": EMA_SPAN,
+            "elapsed_samples": stop - self.started,
+            **self._format_scopes(ema_rates, lambda rate: {"bytes_per_second": round(rate, 2)}),
+        }
+        return windows, samples, partial_ns // 1_000_000, ema
+
+    @staticmethod
+    def _format_scopes(values, render):
+        channels = {
+            scope: {channel: values.get((scope, channel), 0) for channel in GROUPS}
+            for scope in SCOPES
+        }
+        channels["combined"] = {
+            channel: sum(channels[scope][channel] for scope in SCOPES) for channel in GROUPS
+        }
+        return {
+            scope: {
+                "channels": {channel: render(value) for channel, value in by_channel.items()},
+                "total": render(sum(by_channel.values())),
+            }
+            for scope, by_channel in channels.items()
+        }
 
     @staticmethod
     def _rate(size, elapsed):
@@ -105,7 +151,7 @@ class BackfillProgress:
                 self.ranges = self._read_ranges()
                 self.next_refresh = time.monotonic() + 5
             ranges, ranges_at = self.ranges
-        windows, samples, last_partial_ms = self.meter.snapshot()
+        windows, samples, last_partial_ms, ema = self.meter.snapshot()
         channels = {}
         for channel, (target, verified, unresolved, pending) in ranges.items():
             slots = max(0, target - verified)
@@ -151,6 +197,7 @@ class BackfillProgress:
             "progress_as_of_ms": ranges_at,
             "byte_basis": "committed_postgresql_row",
             "windows": windows,
+            "ema": ema,
             "channels": channels,
             "total": total,
         }
