@@ -86,8 +86,7 @@ class HistoricalAuxiliaryFetch:
         self.vision, self.clients = vision, clients
         self.clock_ms, self.stop = clock_ms, stop
 
-    def trade_day(self, instrument, start, end, volumes):
-        observations, complete, seen = [], 0, set()
+    def _trade_minutes_reference(self, instrument, start, end, volumes):
         rows = self.vision.iter_rows(instrument, "agg_trade", start, end)
         for opening, group in groupby(rows, key=lambda row: row.timestamp_ms // MINUTE * MINUTE):
             if self.stop.is_set():
@@ -97,13 +96,31 @@ class HistoricalAuxiliaryFetch:
                 if len(events) >= 150_000:
                     raise ProtocolError("archived trade minute exceeds its evidence bound")
                 events.append(trade_provenance(row))
-            seen.add(opening)
             values = dict(trade_flow_values(events))
             qty = values["AGGTRADE_QUANTITYBUY"] + values["AGGTRADE_QUANTITYSELL"]
             proven = qty == volumes.get(opening) and all(
                 right.aggregate_id == left.aggregate_id + 1
                 for left, right in zip(events, events[1:], strict=False)
             )
+            yield opening, values, proven
+
+    def _trade_minutes(self, instrument, start, end, volumes):
+        batch_reader = getattr(self.vision, "trade_minute_batch", None)
+        batch = batch_reader(instrument, start, end) if batch_reader is not None else None
+        if batch is None:
+            yield from self._trade_minutes_reference(instrument, start, end, volumes)
+            return
+        for opening, fields, continuous in batch:
+            if self.stop.is_set():
+                raise InterruptedError
+            values = dict(fields)
+            qty = values["AGGTRADE_QUANTITYBUY"] + values["AGGTRADE_QUANTITYSELL"]
+            yield opening, values, continuous and qty == volumes.get(opening)
+
+    def trade_day(self, instrument, start, end, volumes):
+        observations, complete, seen = [], 0, set()
+        for opening, values, proven in self._trade_minutes(instrument, start, end, volumes):
+            seen.add(opening)
             values["AGGTRADE_VISION_ARCHIVE"] = 1
             complete += int(proven)
             observations.append(

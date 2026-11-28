@@ -12,10 +12,12 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.client import HTTPException
 from pathlib import Path, PurePosixPath
+from threading import BoundedSemaphore
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, build_opener
@@ -40,6 +42,9 @@ MAX_CSV_BYTES = 8_589_934_592
 MAX_LINE_CHARS = 65_536
 MAX_DAILY_ROWS = 50_000_000
 MAX_FILES = 20_000
+TRADE_BATCH_CSV_BYTES = 256 * 1024**2
+SPOT_VISION_US_START_MS = 1_735_689_600_000
+_TRADE_BATCH_PARSE_SLOTS = BoundedSemaphore(2)
 NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 KLINE_COLUMNS = (
     "open_time",
@@ -545,7 +550,7 @@ class VisionArchive:
                 if not raw.isdigit():
                     raise ValueError
                 timestamp = int(raw)
-                if instrument.market == Market.SPOT and day_start >= 1_735_689_600_000:
+                if instrument.market == Market.SPOT and day_start >= SPOT_VISION_US_START_MS:
                     timestamp //= 1000
             if not day_start <= timestamp < day_start + DAY:
                 raise ValueError
@@ -569,121 +574,175 @@ class VisionArchive:
         except (ValueError, TypeError, OverflowError, IndexError):
             raise ProtocolError("invalid Vision CSV identity or timestamp") from None
 
+    @contextmanager
+    def _open_csv(self, receipt, descriptor):
+        with zipfile.ZipFile(receipt.archive_path) as archive:
+            members = archive.infolist()
+            expected_name = (
+                PurePosixPath(descriptor.object_key).name.removesuffix(".zip") + ".csv"
+            )
+            if len(members) != 1:
+                raise ProtocolError("Vision ZIP must contain exactly one CSV")
+            member = members[0]
+            if (
+                member.filename != expected_name
+                or member.is_dir()
+                or stat.S_ISLNK(member.external_attr >> 16)
+                or member.flag_bits & 1
+                or not 0 < member.file_size <= MAX_CSV_BYTES
+            ):
+                raise ProtocolError("invalid bounded Vision ZIP member")
+            with archive.open(member) as raw:
+                yield raw, member.file_size
+
     def _file_rows(self, instrument, channel, descriptor):
         receipt = self._archive(instrument, channel, descriptor)
         try:
-            with zipfile.ZipFile(receipt.archive_path) as archive:
-                members = archive.infolist()
-                expected_name = (
-                    PurePosixPath(descriptor.object_key).name.removesuffix(".zip") + ".csv"
-                )
-                if len(members) != 1:
-                    raise ProtocolError("Vision ZIP must contain exactly one CSV")
-                member = members[0]
-                if (
-                    member.filename != expected_name
-                    or member.is_dir()
-                    or stat.S_ISLNK(member.external_attr >> 16)
-                    or member.flag_bits & 1
-                    or not 0 < member.file_size <= MAX_CSV_BYTES
-                ):
-                    raise ProtocolError("invalid bounded Vision ZIP member")
-                with archive.open(member) as raw:
-                    text = io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
+            with self._open_csv(receipt, descriptor) as (raw, _):
+                text = io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
 
-                    def lines():
-                        while line := text.readline(MAX_LINE_CHARS + 1):
-                            self._check_stop()
-                            if len(line) > MAX_LINE_CHARS:
-                                raise ProtocolError("Vision CSV line exceeds limit")
-                            yield line
-
-                    reader = csv.reader(lines(), strict=True)
-                    columns = None
-                    previous, previous_values, previous_id = -1, None, -1
-                    metrics = {}
-                    for number, fields in enumerate(reader, start=1):
+                def lines():
+                    while line := text.readline(MAX_LINE_CHARS + 1):
                         self._check_stop()
-                        if number > MAX_DAILY_ROWS:
-                            raise ProtocolError("Vision daily row limit exceeded")
-                        values = tuple(fields)
-                        if not values:
-                            continue
-                        if columns is None and re.sub("[^a-z]", "", values[0].lower()) in {
-                            "opentime",
-                            "aggregatetradeid",
-                            "aggtradeid",
-                            "createtime",
-                        } | ({"timestamp"} if channel == "depth" else set()):
-                            columns = values
-                            continue
-                        allowed = (
-                            {12}
+                        if len(line) > MAX_LINE_CHARS:
+                            raise ProtocolError("Vision CSV line exceeds limit")
+                        yield line
+
+                reader = csv.reader(lines(), strict=True)
+                columns = None
+                previous, previous_values, previous_id = -1, None, -1
+                metrics = {}
+                for number, fields in enumerate(reader, start=1):
+                    self._check_stop()
+                    if number > MAX_DAILY_ROWS:
+                        raise ProtocolError("Vision daily row limit exceeded")
+                    values = tuple(fields)
+                    if not values:
+                        continue
+                    if columns is None and re.sub("[^a-z]", "", values[0].lower()) in {
+                        "opentime",
+                        "aggregatetradeid",
+                        "aggtradeid",
+                        "createtime",
+                    } | ({"timestamp"} if channel == "depth" else set()):
+                        columns = values
+                        continue
+                    allowed = (
+                        {12}
+                        if channel == "kline"
+                        else {4}
+                        if channel == "depth"
+                        else {8}
+                        if channel == "metrics" or instrument.market == Market.SPOT
+                        else {7, 8}
+                    )
+                    if len(values) not in allowed:
+                        raise ProtocolError("unexpected Vision CSV column count")
+                    if columns is None:
+                        columns = (
+                            KLINE_COLUMNS
                             if channel == "kline"
-                            else {4}
+                            else METRIC_COLUMNS
+                            if channel == "metrics"
+                            else DEPTH_COLUMNS
                             if channel == "depth"
-                            else {8}
-                            if channel == "metrics" or instrument.market == Market.SPOT
-                            else {7, 8}
-                        )
-                        if len(values) not in allowed:
-                            raise ProtocolError("unexpected Vision CSV column count")
-                        if columns is None:
-                            columns = (
-                                KLINE_COLUMNS
-                                if channel == "kline"
-                                else METRIC_COLUMNS
-                                if channel == "metrics"
-                                else DEPTH_COLUMNS
-                                if channel == "depth"
-                                else TRADE_COLUMNS
-                                + (
-                                    ("is_best_match",)
-                                    if instrument.market == Market.SPOT
-                                    else ("normal_quantity",)
-                                    if len(values) == 8
-                                    else ()
-                                )
+                            else TRADE_COLUMNS
+                            + (
+                                ("is_best_match",)
+                                if instrument.market == Market.SPOT
+                                else ("normal_quantity",)
+                                if len(values) == 8
+                                else ()
                             )
-                        if len(columns) != len(values):
-                            raise ProtocolError("Vision header differs from its row")
-                        stamp = self._timestamp(
-                            instrument, channel, values, descriptor.day_start_ms
                         )
-                        if stamp is None:
-                            continue
-                        row = VisionRow(
-                            instrument, channel, stamp, values, columns, number, receipt
-                        )
-                        if channel == "metrics":
-                            old = metrics.get(stamp)
-                            if old is not None and old.values != values:
-                                raise ProtocolError("conflicting Vision metric sample")
-                            metrics.setdefault(stamp, row)
-                            if len(metrics) > 288:
-                                raise ProtocolError("Vision metric day exceeds native samples")
-                            continue
-                        if channel == "depth":
-                            if stamp < previous:
-                                raise ProtocolError("Vision depth timestamp moved backward")
-                            previous = stamp
-                            yield row
-                            continue
-                        identity = int(values[0]) if channel == "agg_trade" else stamp
-                        if stamp < previous or identity < previous_id:
-                            raise ProtocolError("Vision CSV order moved backward")
-                        if identity == previous_id:
-                            if values != previous_values:
-                                raise ProtocolError("conflicting duplicate Vision row")
-                            continue
-                        previous, previous_id, previous_values = stamp, identity, values
-                        yield row
+                    if len(columns) != len(values):
+                        raise ProtocolError("Vision header differs from its row")
+                    stamp = self._timestamp(
+                        instrument, channel, values, descriptor.day_start_ms
+                    )
+                    if stamp is None:
+                        continue
+                    row = VisionRow(
+                        instrument, channel, stamp, values, columns, number, receipt
+                    )
                     if channel == "metrics":
-                        yield from (metrics[key] for key in sorted(metrics))
+                        old = metrics.get(stamp)
+                        if old is not None and old.values != values:
+                            raise ProtocolError("conflicting Vision metric sample")
+                        metrics.setdefault(stamp, row)
+                        if len(metrics) > 288:
+                            raise ProtocolError("Vision metric day exceeds native samples")
+                        continue
+                    if channel == "depth":
+                        if stamp < previous:
+                            raise ProtocolError("Vision depth timestamp moved backward")
+                        previous = stamp
+                        yield row
+                        continue
+                    identity = int(values[0]) if channel == "agg_trade" else stamp
+                    if stamp < previous or identity < previous_id:
+                        raise ProtocolError("Vision CSV order moved backward")
+                    if identity == previous_id:
+                        if values != previous_values:
+                            raise ProtocolError("conflicting duplicate Vision row")
+                        continue
+                    previous, previous_id, previous_values = stamp, identity, values
+                    yield row
+                if channel == "metrics":
+                    yield from (metrics[key] for key in sorted(metrics))
         except InterruptedError:
             raise
         except (zipfile.BadZipFile, UnicodeError, csv.Error, RuntimeError, OSError):
             raise ProtocolError("invalid or damaged Vision CSV archive") from None
+
+    def trade_minute_batch(self, instrument, start_ms, end_ms):
+        if not _stamp(start_ms) or not _stamp(end_ms) or start_ms >= end_ms:
+            raise ValidationError("invalid Vision row range")
+        if start_ms // DAY != (end_ms - 1) // DAY:
+            return None
+        try:
+            from omega.infrastructure.binance.vision_trade_batch import aggregate_trade_csv
+        except ModuleNotFoundError as error:
+            if error.name != "polars":
+                raise
+            return None
+        files = self.files(instrument, "agg_trade", start_ms, end_ms)
+        if not files:
+            return []
+        if len(files) != 1:
+            return None
+        descriptor = files[0]
+        receipt = self._archive(instrument, "agg_trade", descriptor)
+        if receipt.received_at_ms < end_ms - 1:
+            # The row parser verifies exact trade/receipt times in this case.
+            return None
+        while not _TRADE_BATCH_PARSE_SLOTS.acquire(timeout=0.25):
+            self._check_stop()
+        try:
+            self._check_stop()
+            with self._open_csv(receipt, descriptor) as (raw, size):
+                if size > TRADE_BATCH_CSV_BYTES:
+                    return None
+                data = io.BytesIO()
+                while chunk := raw.read(1_048_576):
+                    self._check_stop()
+                    data.write(chunk)
+            result = aggregate_trade_csv(
+                data.getvalue(),
+                instrument,
+                descriptor.day_start_ms,
+                start_ms,
+                end_ms,
+                check_stop=self._check_stop,
+            )
+            self._check_stop()
+            return result
+        except InterruptedError:
+            raise
+        except (zipfile.BadZipFile, UnicodeError, RuntimeError, OSError):
+            raise ProtocolError("invalid or damaged Vision CSV archive") from None
+        finally:
+            _TRADE_BATCH_PARSE_SLOTS.release()
 
     def first_timestamp(self, instrument, channel):
         prefix = _prefix(instrument, channel)
