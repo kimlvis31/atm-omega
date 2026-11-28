@@ -33,6 +33,7 @@ from omega.domain.models import Instrument, Market
 from omega.infrastructure.binance.budget import Window
 from omega.infrastructure.binance.shared_budget import SharedRequestBudget
 from omega.infrastructure.binance.transport import HttpRequest, UrllibTransport, _NoRedirect
+from omega.infrastructure.binance.vision_csv import iter_csv_fields
 
 BASE_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision/"
 DAY = 86_400_000
@@ -595,7 +596,7 @@ class VisionArchive:
             with archive.open(member) as raw:
                 yield raw, member.file_size
 
-    def _file_rows(self, instrument, channel, descriptor):
+    def _file_rows(self, instrument, channel, descriptor, *, probe=False):
         receipt = self._archive(instrument, channel, descriptor)
         try:
             with self._open_csv(receipt, descriptor) as (raw, _):
@@ -608,7 +609,11 @@ class VisionArchive:
                             raise ProtocolError("Vision CSV line exceeds limit")
                         yield line
 
-                reader = csv.reader(lines(), strict=True)
+                reader = iter_csv_fields(
+                    lines(),
+                    check_stop=self._check_stop,
+                    batch_rows=1 if probe and channel != "metrics" else 4096,
+                )
                 columns = None
                 previous, previous_values, previous_id = -1, None, -1
                 metrics = {}
@@ -765,7 +770,12 @@ class VisionArchive:
         if not first:
             return None
         row = next(
-            (row for row in self._file_rows(instrument, channel, first[0]) if usable(row)), None
+            (
+                row
+                for row in self._file_rows(instrument, channel, first[0], probe=True)
+                if usable(row)
+            ),
+            None,
         )
         if row is not None:
             return row
@@ -773,7 +783,11 @@ class VisionArchive:
             if descriptor.object_key == first[0].object_key:
                 continue
             row = next(
-                (row for row in self._file_rows(instrument, channel, descriptor) if usable(row)),
+                (
+                    row
+                    for row in self._file_rows(instrument, channel, descriptor, probe=True)
+                    if usable(row)
+                ),
                 None,
             )
             if row is not None:
