@@ -10,7 +10,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = []
 
 [project.optional-dependencies]
-streaming = ["websockets==17.2"]
+streaming = ["websockets==17.4"]
 postgres = ["psycopg[binary]==3.3.6"]
 gui = ["PySide6_Essentials==6.12.0", "PySide6_Addons==6.12.0"]
 analysis = ["numpy==2.5.2", "scipy==1.18.1"]
